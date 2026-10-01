@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import math
+
+import pandas as pd
+
+from .metrics import prepare_projects
+from .work_schedule import nominal_minutes_for_workload
+
+
+PRIORITY_RANK = {
+    "urgente": 0,
+    "crítica": 0,
+    "critica": 0,
+    "alta": 1,
+    "normal": 2,
+    "média": 2,
+    "media": 2,
+    "baixa": 3,
+}
+
+
+def _priority(value: object) -> int:
+    return PRIORITY_RANK.get(str(value or "").strip().casefold(), 2)
+
+
+def _coverage_score(potential_posts: float, potential_projects: float, target_posts: int, target_projects: int) -> float:
+    post_cov = min(1.0, max(0.0, float(potential_posts)) / max(1, target_posts))
+    project_cov = min(1.0, max(0.0, float(potential_projects)) / max(1, target_projects))
+    return (post_cov + project_cov) / 2.0
+
+
+def _pick_project(candidates: pd.DataFrame, need_posts: int, need_projects: int) -> pd.Series | None:
+    """Pick one project that best advances the current designer toward both targets.
+
+    Assignment happens one project at a time so scarce work is spread fairly across
+    designers before a second/third project is added to the same person.
+    """
+    if candidates.empty:
+        return None
+
+    work = candidates.copy()
+    ideal_posts = (need_posts / max(1, need_projects)) if need_posts > 0 else 0.0
+
+    def score(row: pd.Series) -> tuple:
+        posts = int(row["posts"])
+        if need_posts <= 0 and need_projects > 0:
+            fit = posts  # need project count only: prefer the smallest PLN
+        else:
+            under = max(0, need_posts - posts)
+            over = max(0, posts - need_posts)
+            closeness = abs(posts - ideal_posts)
+            # Prefer a useful size, but strongly avoid consuming a very large project
+            # when a small one would cover the remaining shortfall.
+            fit = closeness + over * 3 + (under / max(1, need_projects)) * 0.05
+
+        deadline = row.get("_deadline_sort")
+        deadline_ord = deadline.value if isinstance(deadline, pd.Timestamp) and deadline is not pd.NaT else pd.Timestamp.max.value
+        return (int(row.get("_priority", 2)), fit, deadline_ord, posts, str(row.get("item_id", "")))
+
+    best_idx = min(work.index, key=lambda idx: score(work.loc[idx]))
+    return work.loc[best_idx]
+
+
+def suggest_assignments(projects, snapshots, targets, statuses, max_new_projects_per_designer=6):
+    df = prepare_projects(projects, "America/Fortaleza")
+    df["_priority"] = df["priority"].map(_priority)
+    df["_deadline_sort"] = pd.to_datetime(df["deadline"], errors="coerce").fillna(pd.Timestamp.max)
+
+    # Real rule: Status = Em projeto + no assignee = available.
+    # PLN and Nota SGO are mandatory for automatic distribution.
+    available = df[
+        df["status_norm"].isin(statuses.project_pool_set)
+        & (df["assignee_norm"] == "")
+        & df["posts_valid"]
+        & df["sgo_present"]
+    ].copy()
+
+    if snapshots.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    virtual = snapshots.copy().reset_index(drop=True)
+    virtual["_new_projects"] = 0
+    virtual["_new_posts"] = 0
+    if "Potencial postes" in virtual.columns:
+        base_potential_posts = virtual["Potencial postes"].fillna(0).astype(int)
+    else:
+        base_potential_posts = (targets.target_posts - virtual.get("Sem cobertura postes", 0)).clip(lower=0).astype(int)
+    if "Potencial projetos" in virtual.columns:
+        base_potential_projects = virtual["Potencial projetos"].fillna(0).astype(int)
+    else:
+        base_potential_projects = (targets.target_projects - virtual.get("Sem cobertura projetos", 0)).clip(lower=0).astype(int)
+    virtual["_base_potential_posts"] = base_potential_posts
+    virtual["_base_potential_projects"] = base_potential_projects
+    virtual["_virtual_posts"] = base_potential_posts
+    virtual["_virtual_projects"] = base_potential_projects
+
+    remaining_projects = available.copy()
+    suggestion_rows: list[dict] = []
+
+    # Water-filling / round-robin by lowest target coverage. This prevents a scarce
+    # pool from being concentrated in the first designer in the list.
+    while not remaining_projects.empty:
+        eligible_indices: list[int] = []
+        for idx, snap in virtual.iterrows():
+            if int(snap["Tempo útil restante (min)"]) <= 0:
+                continue
+            # If an already assigned project has no PLN, the remaining post target
+            # cannot be calculated safely. Hold new automatic assignments until
+            # the PLN is completed in the source base.
+            if int(snap.get("Carteira sem PLN", 0) or 0) > 0:
+                continue
+            if int(snap["_new_projects"]) >= int(max_new_projects_per_designer):
+                continue
+            needs_posts = int(snap["_virtual_posts"]) < targets.target_posts
+            needs_projects = int(snap["_virtual_projects"]) < targets.target_projects
+            if needs_posts or needs_projects:
+                eligible_indices.append(idx)
+
+        if not eligible_indices:
+            break
+
+        def designer_key(idx: int) -> tuple:
+            snap = virtual.loc[idx]
+            coverage = _coverage_score(
+                snap["_virtual_posts"], snap["_virtual_projects"], targets.target_posts, targets.target_projects
+            )
+            # Lower coverage first. Then fewer new assignments this cycle, then
+            # lower realized production and stable name order.
+            return (
+                coverage,
+                int(snap["_new_projects"]),
+                int(snap["Postes realizados"]),
+                int(snap["Projetos realizados"]),
+                str(snap["Projetista"]),
+            )
+
+        designer_idx = min(eligible_indices, key=designer_key)
+        snap = virtual.loc[designer_idx]
+        need_posts = max(0, targets.target_posts - int(snap["_virtual_posts"]))
+        need_projects = max(0, targets.target_projects - int(snap["_virtual_projects"]))
+        chosen = _pick_project(remaining_projects, need_posts, need_projects)
+        if chosen is None:
+            break
+
+        item_id = str(chosen["item_id"])
+        posts = int(chosen["posts"])
+        designer = str(snap["Projetista"])
+
+        suggestion_rows.append(
+            {
+                "Projetista": designer,
+                "item_id": item_id,
+                "Nº da nota": chosen.get("note"),
+                "Nota SGO": chosen.get("sgo"),
+                "PLN": posts,
+                "Regional": chosen.get("regional"),
+                "Município": chosen.get("municipality"),
+                "Prioridade": chosen.get("priority"),
+                "Prazo": chosen.get("deadline"),
+                "etag": chosen.get("etag"),
+                "Motivo": f"Balancear carteira: faltavam {need_posts} poste(s) e {need_projects} projeto(s) para cobertura da meta",
+            }
+        )
+
+        virtual.at[designer_idx, "_new_projects"] = int(snap["_new_projects"]) + 1
+        virtual.at[designer_idx, "_new_posts"] = int(snap["_new_posts"]) + posts
+        virtual.at[designer_idx, "_virtual_posts"] = int(snap["_virtual_posts"]) + posts
+        virtual.at[designer_idx, "_virtual_projects"] = int(snap["_virtual_projects"]) + 1
+        remaining_projects = remaining_projects[remaining_projects["item_id"].astype(str) != item_id]
+
+    designer_rows: list[dict] = []
+    for _, snap in virtual.iterrows():
+        designer = str(snap["Projetista"])
+        suggested_projects = int(snap["_new_projects"])
+        suggested_posts = int(snap["_new_posts"])
+        remaining_minutes = int(snap["Tempo útil restante (min)"])
+        remaining_work_posts = max(0, targets.target_posts - int(snap["Postes realizados"]))
+        remaining_work_projects = max(0, targets.target_projects - int(snap["Projetos realizados"]))
+        nominal_needed_minutes = nominal_minutes_for_workload(
+            remaining_work_posts,
+            remaining_work_projects,
+            targets.target_posts,
+            targets.target_projects,
+        )
+        time_risk = nominal_needed_minutes > remaining_minutes
+        covered_posts = int(snap["_virtual_posts"]) >= targets.target_posts
+        covered_projects = int(snap["_virtual_projects"]) >= targets.target_projects
+
+        if int(snap.get("Carteira sem PLN", 0) or 0) > 0:
+            reason = "Distribuição bloqueada: existe projeto atribuído sem PLN"
+        elif covered_posts and covered_projects:
+            reason = "Carteira cobre a meta diária"
+        elif suggested_projects:
+            reason = "Carga distribuída de forma balanceada; fila ainda insuficiente para cobertura total"
+        elif int(snap["_base_potential_posts"]) >= targets.target_posts and int(snap["_base_potential_projects"]) >= targets.target_projects:
+            reason = "Carteira já cobria a meta antes do ciclo"
+        else:
+            reason = "Não há projetos elegíveis suficientes na fila"
+
+        designer_rows.append(
+            {
+                "Projetista": designer,
+                "Novos projetos sugeridos": suggested_projects,
+                "Novos postes sugeridos": suggested_posts,
+                "Potencial postes após distribuição": int(snap["_virtual_posts"]),
+                "Potencial projetos após distribuição": int(snap["_virtual_projects"]),
+                "Risco de tempo": bool(time_risk),
+                "Motivo": reason,
+            }
+        )
+
+    return pd.DataFrame(suggestion_rows), pd.DataFrame(designer_rows)

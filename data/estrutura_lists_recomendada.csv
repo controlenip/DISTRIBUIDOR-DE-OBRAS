@@ -1,0 +1,12 @@
+Uso,Coluna Excel,Nome exibido no Lists,Regra no sistema,Obrigatório
+Número da solicitação,A,N° da nota,Identificação da solicitação do cliente,Sim
+Número do projeto,C,Nota SGO,Identificador que o projetista usa para iniciar o projeto,Sim
+Status operacional,E,Status do projeto,Somente Em projeto entra na carteira/fila,Sim
+Regional,G,Regional,Filtro e análise,Não
+Município,H,Município,Filtro e análise,Não
+Prazo,M,Prazo,Desempate/priorização,Não
+Carga planejada,R,P L N,Quantidade de postes usada para distribuir a obra,Sim
+Projetista,U,Projetistas,Vazio = disponível; preenchido = já atribuído,Sim
+Data de conclusão,V,Data de entrega do projeto,Define em que dia a obra foi concluída,Sim para indicadores
+Quantidade final,W,Qtd. de poste,Postes realizados após conclusão; fallback para PLN quando vazio,Recomendado
+Prioridade,AP,Prioridade,Desempate na distribuição,Não
