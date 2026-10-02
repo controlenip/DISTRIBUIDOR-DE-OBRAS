@@ -29,6 +29,7 @@ class AutomationPolicy:
     experience_mode: str = "Preferencial"
     designer_experience: dict[str, str] | None = None
     project_difficulty: dict[str, str] | None = None
+    oversize_lock_enabled: bool = True
 
 
 @dataclass
@@ -131,6 +132,7 @@ class AutomationEngine:
             designer_experience=self.policy.designer_experience,
             project_difficulty=self.policy.project_difficulty,
             experience_mode=self.policy.experience_mode,
+            oversize_lock_enabled=self.policy.oversize_lock_enabled,
         )
 
         # Last defensive check: no duplicate item can appear in one cycle.

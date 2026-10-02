@@ -40,12 +40,15 @@ def _pick_project(
     need_projects: int,
     current_posts: int,
     current_projects: int,
+    current_active_projects: int,
     max_portfolio_posts: int | None,
     max_portfolio_projects: int | None,
     priority_enabled: bool,
     experience_enabled: bool = False,
     designer_experience: str = "Intermediário",
     experience_mode: str = "Preferencial",
+    oversize_lock_enabled: bool = True,
+    target_posts: int = 30,
 ) -> pd.Series | None:
     """Pick one project that advances targets without breaching portfolio limits.
 
@@ -61,6 +64,11 @@ def _pick_project(
         work = work[(current_posts + work["posts"].astype(int)) <= int(max_portfolio_posts)]
     if max_portfolio_projects is not None and current_projects + 1 > int(max_portfolio_projects):
         return None
+    # Projetos individuais acima da meta diária são tratados como carga especial.
+    # Para garantir a trava de forma determinística a partir da BASE, a automação
+    # só entrega esse tipo de obra para quem está sem projetos Em projeto.
+    if oversize_lock_enabled and current_active_projects > 0:
+        work = work[work["posts"].astype(int) <= int(target_posts)]
     if work.empty:
         return None
 
@@ -114,6 +122,7 @@ def suggest_assignments(
     designer_experience: dict[str, str] | None = None,
     project_difficulty: dict[str, str] | None = None,
     experience_mode: str = "Preferencial",
+    oversize_lock_enabled: bool = True,
 ):
     """Suggest a fair, non-destructive distribution.
 
@@ -123,7 +132,9 @@ def suggest_assignments(
     - lowest target coverage receives the next project (round-robin/water filling);
     - priority/deadline can influence which project is selected;
     - optional experience matching uses PI (Tipo Projeto) as project difficulty;
-    - portfolio caps prevent overload.
+    - portfolio caps prevent overload;
+    - when oversize lock is enabled, a project with posts > daily target blocks
+      that designer from receiving another project while it remains Em projeto.
     """
     df = prepare_projects(projects, "America/Fortaleza")
     df["_priority"] = df["priority"].map(_priority)
@@ -168,6 +179,14 @@ def suggest_assignments(
     virtual["_base_potential_projects"] = base_potential_projects
     virtual["_virtual_posts"] = base_potential_posts
     virtual["_virtual_projects"] = base_potential_projects
+    if "Projetos em carteira" in virtual.columns:
+        virtual["_active_projects_for_oversize"] = virtual["Projetos em carteira"].fillna(0).astype(int)
+    else:
+        virtual["_active_projects_for_oversize"] = 0
+    if "Bloqueio projeto acima da meta" in virtual.columns:
+        virtual["_oversize_lock"] = virtual["Bloqueio projeto acima da meta"].fillna(False).astype(bool)
+    else:
+        virtual["_oversize_lock"] = False
 
     remaining_projects = available.copy()
     suggestion_rows: list[dict] = []
@@ -178,6 +197,8 @@ def suggest_assignments(
             if respect_time and int(snap["Tempo útil restante (min)"]) <= 0:
                 continue
             if int(snap.get("Carteira sem PLN", 0) or 0) > 0:
+                continue
+            if oversize_lock_enabled and bool(snap.get("_oversize_lock", False)):
                 continue
             if int(snap["_new_projects"]) >= int(max_new_projects_per_designer):
                 continue
@@ -221,12 +242,15 @@ def suggest_assignments(
                 need_projects,
                 int(snap["_virtual_posts"]),
                 int(snap["_virtual_projects"]),
+                int(snap.get("_active_projects_for_oversize", 0)),
                 max_portfolio_posts,
                 max_portfolio_projects,
                 priority_enabled,
                 experience_enabled=experience_enabled,
                 designer_experience=exp_level,
                 experience_mode=experience_mode,
+                oversize_lock_enabled=oversize_lock_enabled,
+                target_posts=targets.target_posts,
             )
             if candidate is not None:
                 chosen_designer_idx = designer_idx
@@ -250,6 +274,7 @@ def suggest_assignments(
         priority_value = str(chosen_project.get("priority") or "Normal").strip() or "Normal"
         project_type_value = str(chosen_project.get("project_type") or "").strip()
         difficulty_value = normalize_difficulty_label(chosen_project.get("_difficulty", "Médio"))
+        is_oversized_project = posts > int(targets.target_posts)
 
         reason_parts = [f"menor cobertura da equipe ({before_posts} postes / {before_projects} projetos)"]
         if experience_enabled:
@@ -261,6 +286,10 @@ def suggest_assignments(
             reason_parts.append(f"prioridade {priority_value}")
         if need_posts > 0 or need_projects > 0:
             reason_parts.append(f"faltavam {need_posts} postes e {need_projects} projetos")
+        if oversize_lock_enabled and is_oversized_project:
+            reason_parts.append(
+                f"projeto acima da meta diária ({posts}>{targets.target_posts}); projetista bloqueado até a carteira voltar a zero"
+            )
 
         suggestion_rows.append(
             {
@@ -291,6 +320,9 @@ def suggest_assignments(
         virtual.at[chosen_designer_idx, "_new_posts"] = int(snap["_new_posts"]) + posts
         virtual.at[chosen_designer_idx, "_virtual_posts"] = after_posts
         virtual.at[chosen_designer_idx, "_virtual_projects"] = after_projects
+        virtual.at[chosen_designer_idx, "_active_projects_for_oversize"] = int(snap.get("_active_projects_for_oversize", 0)) + 1
+        if oversize_lock_enabled and is_oversized_project:
+            virtual.at[chosen_designer_idx, "_oversize_lock"] = True
         remaining_projects = remaining_projects[remaining_projects["item_id"].astype(str) != item_id]
 
     designer_rows: list[dict] = []
@@ -311,8 +343,12 @@ def suggest_assignments(
         covered_posts = int(snap["_virtual_posts"]) >= targets.target_posts
         covered_projects = int(snap["_virtual_projects"]) >= targets.target_projects
 
-        if int(snap.get("Carteira sem PLN", 0) or 0) > 0:
+        if oversize_lock_enabled and bool(snap.get("_oversize_lock", False)) and suggested_projects == 0:
+            reason = "Bloqueado: projeto acima da meta diária ainda está Em projeto"
+        elif int(snap.get("Carteira sem PLN", 0) or 0) > 0:
             reason = "Distribuição bloqueada: existe projeto atribuído sem Postes Alterados/Novos"
+        elif oversize_lock_enabled and bool(snap.get("_oversize_lock", False)) and suggested_projects > 0:
+            reason = "Recebeu projeto acima da meta diária e ficou bloqueado para novas atribuições"
         elif covered_posts and covered_projects:
             reason = "Carteira cobre a meta diária"
         elif suggested_projects:
@@ -328,6 +364,7 @@ def suggest_assignments(
             {
                 "Projetista": designer,
                 "Experiência": experience_map_norm.get(normalize_person_name(designer), "Intermediário"),
+                "Bloqueado por projeto acima da meta": bool(snap.get("_oversize_lock", False)) if oversize_lock_enabled else False,
                 "Novos projetos sugeridos": suggested_projects,
                 "Novos postes sugeridos": suggested_posts,
                 "Potencial postes após distribuição": int(snap["_virtual_posts"]),

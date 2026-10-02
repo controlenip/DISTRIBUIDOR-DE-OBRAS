@@ -124,6 +124,7 @@ def _add_distribution_summary_sheet(
 
         summary_cols = [
             "Projetista",
+            "Bloqueado por projeto acima da meta",
             "Novos projetos sugeridos",
             "Novos postes sugeridos",
             "Potencial postes após distribuição",

@@ -239,6 +239,7 @@ def status_badge(status: str) -> str:
         "Risco produtivo": "🔴 Risco de não atingir",
         "Encerrado abaixo da meta": "🔴 Fechou abaixo da meta",
         "PLN pendente na carteira": "🟡 Revisar Postes Alterados/Novos",
+        "Bloqueado - projeto acima da meta diária": "🔒 Bloqueado — projeto acima da meta diária",
     }
     return mapping.get(status, status)
 
@@ -248,12 +249,14 @@ def compact_load_table(baseline: pd.DataFrame, target_posts: int, target_project
     if baseline.empty:
         return pd.DataFrame(columns=columns)
     df = baseline.copy()
-    for col in ["Projetos já atribuídos", "PLN já atribuído", "Projetos sem PLN", "Meta restante postes", "Meta restante projetos"]:
+    for col in ["Projetos já atribuídos", "PLN já atribuído", "Projetos sem PLN", "Projetos acima da meta diária", "Meta restante postes", "Meta restante projetos"]:
         if col not in df.columns:
             df[col] = 0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     def friendly_status(row) -> str:
+        if row.get("Projetos acima da meta diária", 0) > 0:
+            return "🔒 Bloqueado — projeto acima da meta diária"
         if row["Projetos sem PLN"] > 0:
             return "🟡 Revisar Postes Alterados/Novos"
         if row["Projetos já atribuídos"] <= 0:
@@ -357,6 +360,7 @@ BASE_DEFAULTS = {
     "priority_enabled": bool(nested(SECRETS, "app", "priority_enabled", default=True)),
     "experience_enabled": bool(nested(SECRETS, "app", "experience_enabled", default=False)),
     "experience_mode": str(nested(SECRETS, "app", "experience_mode", default="Preferencial") or "Preferencial"),
+    "oversize_lock_enabled": bool(nested(SECRETS, "app", "oversize_lock_enabled", default=True)),
 }
 
 SESSION_DEFAULTS = {
@@ -392,6 +396,7 @@ SESSION_DEFAULTS = {
     "cfg_priority_enabled": BASE_DEFAULTS["priority_enabled"],
     "cfg_experience_enabled": BASE_DEFAULTS["experience_enabled"],
     "cfg_experience_mode": BASE_DEFAULTS["experience_mode"],
+    "cfg_oversize_lock_enabled": BASE_DEFAULTS["oversize_lock_enabled"],
     "designer_experience_profile": pd.DataFrame(),
     "project_difficulty_profile": pd.DataFrame(),
     "experience_profile_source_signature": "",
@@ -480,7 +485,7 @@ st.sidebar.caption("Distribuição de obras e produtividade")
 
 PAGE = st.sidebar.radio(
     "Menu",
-    ["🏠 Início", "⚡ Distribuir obras", "👷 Produtividade", "🔎 Dados e regras"],
+    ["🏠 Início", "⚡ Distribuir obras", "👷 Produtividade", "⚙️ Regras e parâmetros"],
     index=0,
     key="nav_page",
 )
@@ -526,6 +531,11 @@ with st.sidebar.expander("⚙️ Opções avançadas"):
         st.session_state.cfg_max_portfolio_posts = st.number_input("Teto de carteira - postes", min_value=int(st.session_state.cfg_target_posts), max_value=300, value=max(int(st.session_state.cfg_max_portfolio_posts), int(st.session_state.cfg_target_posts)))
         st.session_state.cfg_max_portfolio_projects = st.number_input("Teto de carteira - projetos", min_value=int(st.session_state.cfg_target_projects), max_value=40, value=max(int(st.session_state.cfg_max_portfolio_projects), int(st.session_state.cfg_target_projects)))
         st.session_state.cfg_priority_enabled = st.toggle("Considerar Prioridade e Prazo", value=bool(st.session_state.cfg_priority_enabled))
+        st.session_state.cfg_oversize_lock_enabled = st.toggle(
+            "Travar após projeto acima da meta diária",
+            value=bool(st.session_state.cfg_oversize_lock_enabled),
+            help="Se um projeto tiver mais Postes Alterados/Novos que a meta diária, o projetista não recebe novas obras enquanto esse projeto estiver Em projeto.",
+        )
         if WEBHOOK_URL:
             st.session_state.notify_after_distribution = st.toggle("Notificar após gerar distribuição", value=bool(st.session_state.notify_after_distribution))
 
@@ -540,6 +550,7 @@ MAX_PORTFOLIO_PROJECTS = int(st.session_state.cfg_max_portfolio_projects)
 PRIORITY_ENABLED = bool(st.session_state.cfg_priority_enabled)
 EXPERIENCE_ENABLED = bool(st.session_state.cfg_experience_enabled)
 EXPERIENCE_MODE = str(st.session_state.cfg_experience_mode or "Preferencial")
+OVERSIZE_LOCK_ENABLED = bool(st.session_state.cfg_oversize_lock_enabled)
 
 st.sidebar.divider()
 st.sidebar.caption(
@@ -561,7 +572,7 @@ page_subtitles = {
     "🏠 Início": "Carregue as bases, veja a situação da equipe e siga o fluxo guiado até o download.",
     "⚡ Distribuir obras": "Simule, confira, ajuste e só depois gere a distribuição definitiva.",
     "👷 Produtividade": "Acompanhe metas, consistência, histórico individual e projeções.",
-    "🔎 Dados e regras": "Valide a base, consulte auditoria, regras e integrações técnicas.",
+    "⚙️ Regras e parâmetros": "Entenda como carteira, produtividade e distribuição são calculadas e valide a qualidade da base.",
 }
 st.markdown(
     f"""
@@ -823,7 +834,7 @@ def current_simulation_signature() -> str:
         st.session_state.designers_signature or str(len(DESIGNERS)),
         str(TARGETS.target_posts), str(TARGETS.target_projects),
         str(MAX_PORTFOLIO_POSTS), str(MAX_PORTFOLIO_PROJECTS), str(PRIORITY_ENABLED),
-        experience_profiles_hash(),
+        str(OVERSIZE_LOCK_ENABLED), experience_profiles_hash(),
     ])
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -840,6 +851,7 @@ def compute_distribution():
         designer_experience=designer_experience_map(),
         project_difficulty=project_difficulty_map(),
         experience_mode=EXPERIENCE_MODE,
+        oversize_lock_enabled=OVERSIZE_LOCK_ENABLED,
     )
 
 
@@ -892,6 +904,10 @@ def validate_manual_simulation(df: pd.DataFrame) -> list[str]:
     # Recalculate portfolio caps after manual edits.
     base_posts = baseline.set_index("Projetista")["PLN já atribuído"].to_dict()
     base_projects = baseline.set_index("Projetista")["Projetos já atribuídos"].to_dict()
+    base_oversize_lock = (
+        baseline.set_index("Projetista")["Bloqueado por projeto acima da meta"].to_dict()
+        if "Bloqueado por projeto acima da meta" in baseline.columns else {}
+    )
     for designer, group in df.groupby("Projetista"):
         posts_col = POSTS_LABEL if POSTS_LABEL in group.columns else "PLN"
         total_posts = int(base_posts.get(designer, 0)) + int(pd.to_numeric(group[posts_col], errors="coerce").fillna(0).sum())
@@ -900,6 +916,21 @@ def validate_manual_simulation(df: pd.DataFrame) -> list[str]:
             errors.append(
                 f"{designer}: a edição ultrapassa o teto de {MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos."
             )
+        if OVERSIZE_LOCK_ENABLED:
+            group_posts = pd.to_numeric(group[posts_col], errors="coerce").fillna(0)
+            has_oversized = bool((group_posts > TARGETS.target_posts).any())
+            if bool(base_oversize_lock.get(designer, False)) and len(group) > 0:
+                errors.append(
+                    f"{designer}: está bloqueado porque possui projeto acima da meta diária ainda Em projeto."
+                )
+            if has_oversized and int(base_projects.get(designer, 0)) > 0:
+                errors.append(
+                    f"{designer}: projeto acima de {TARGETS.target_posts} postes só pode ser atribuído quando a carteira Em projeto estiver zerada."
+                )
+            if has_oversized and len(group) > 1:
+                errors.append(
+                    f"{designer}: ao receber projeto acima da meta diária, não pode receber outras obras no mesmo ciclo."
+                )
 
     if EXPERIENCE_ENABLED and str(EXPERIENCE_MODE).casefold() == "estrito":
         exp_map = designer_experience_map()
@@ -1319,7 +1350,7 @@ elif PAGE == "👷 Produtividade":
     selected_label = ANALYSIS_NOW.strftime("%d/%m/%Y")
     is_current_day = analysis_date == NOW.date()
     st.markdown(f'<div class="section-title">Produtividade em {selected_label}</div>', unsafe_allow_html=True)
-    st.caption("Produção = projetos com Data de entrega do projeto na data analisada. Postes usa Qtd. de poste final; Postes Alterados/Novos é o fallback.")
+    st.caption("Produção só é contabilizada quando Status do projeto = Concluído E a coluna V (Data de entrega do projeto) contém uma data válida. Obras Em projeto contam apenas como carteira.")
 
     total_posts_day = int(pd.to_numeric(analysis_snapshot["Postes realizados"], errors="coerce").fillna(0).sum())
     total_projects_day = int(pd.to_numeric(analysis_snapshot["Projetos realizados"], errors="coerce").fillna(0).sum())
@@ -1365,7 +1396,7 @@ elif PAGE == "👷 Produtividade":
 
     with individual_tab:
         selected_designer = st.selectbox("Projetista", DESIGNERS, key="designer_history_v13")
-        history = designer_daily_history(projects, selected_designer, analysis_date, TARGETS, TIMEZONE, days=20)
+        history = designer_daily_history(projects, selected_designer, analysis_date, TARGETS, TIMEZONE, days=20, statuses=STATUS)
         h1, h2, h3 = st.columns(3)
         h1.metric("Postes nos últimos 20 dias úteis", int(history["Postes"].sum()))
         h2.metric("Projetos nos últimos 20 dias úteis", int(history["Projetos"].sum()))
@@ -1378,7 +1409,7 @@ elif PAGE == "👷 Produtividade":
         st.dataframe(history, use_container_width=True, hide_index=True)
 
         month_start = analysis_date.replace(day=1)
-        quality_proxy = designer_quality_proxy(projects, [selected_designer], month_start, analysis_date, TIMEZONE)
+        quality_proxy = designer_quality_proxy(projects, [selected_designer], month_start, analysis_date, TIMEZONE, statuses=STATUS)
         if not quality_proxy.empty and int(quality_proxy.iloc[0]["Projetos entregues"]) > 0:
             st.markdown("#### Sinal de qualidade disponível na base")
             st.caption("'Reanálise registrada' é um indicador de processo, não uma classificação de erro do projetista.")
@@ -1442,18 +1473,44 @@ elif PAGE == "👷 Produtividade":
 # -----------------------------------------------------------------------------
 # PAGE: DATA + RULES
 # -----------------------------------------------------------------------------
-elif PAGE == "🔎 Dados e regras":
+elif PAGE == "⚙️ Regras e parâmetros":
+    st.markdown('<div class="section-title">Regras operacionais</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="rule-card"><b>1. Carteira não é produtividade.</b><br>
+        Uma obra com <b>Status = Em projeto</b> e Projetista preenchido entra somente na carteira/carga. Ela ainda não conta como produção.</div>
+        <div class="rule-card" style="margin-top:8px"><b>2. Quando a produção é contabilizada.</b><br>
+        Só conta quando <b>Status = Concluído</b> e a <b>coluna V — Data de entrega do projeto</b> contém uma data válida. Essa data define o dia, a semana e o mês da produtividade.</div>
+        <div class="rule-card" style="margin-top:8px"><b>3. Meta diária não é cumulativa.</b><br>
+        A referência é <b>{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos por dia</b>. Produção acima da meta não reduz a meta do dia seguinte.</div>
+        <div class="rule-card" style="margin-top:8px"><b>4. Projeto acima da meta diária.</b><br>
+        {"Regra ativa: " if OVERSIZE_LOCK_ENABLED else "Regra desativada: "}
+        se uma obra individual tiver mais de <b>{TARGETS.target_posts} Postes Alterados/Novos</b>, ela só é distribuída automaticamente para um projetista sem outras obras Em projeto. Depois da atribuição, ele fica <b>bloqueado para novas obras</b> enquanto esse projeto permanecer Em projeto.</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="section-title">Parâmetros atuais</div>', unsafe_allow_html=True)
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Meta diária", f"{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos")
+    r2.metric("Faixa mínima", f"{TARGETS.min_posts} postes / {TARGETS.min_projects} projetos")
+    r3.metric("Teto de carteira", f"{MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos")
+    locked_count = int(baseline.get("Bloqueado por projeto acima da meta", pd.Series(dtype=bool)).fillna(False).astype(bool).sum()) if not baseline.empty else 0
+    r4.metric("Bloqueados por projeto grande", locked_count)
+    st.caption("Os valores podem ser alterados em ⚙️ Opções avançadas no menu lateral, no modo Administrador.")
+
     st.markdown('<div class="section-title">Qualidade da BASE LIST</div>', unsafe_allow_html=True)
-    q1, q2, q3, q4, q5, q6 = st.columns(6)
+    q1, q2, q3, q4, q5, q6, q7 = st.columns(7)
     q1.metric("Em projeto", quality["em_projeto"])
     q2.metric("Disponíveis", quality["disponiveis"])
     q3.metric("Já atribuídas", quality["atribuidos"])
     q4.metric("Sem Postes Alt./Novos", quality["disponiveis_sem_pln"])
     q5.metric("Sem SGO", quality["disponiveis_sem_sgo"])
     q6.metric("SGO duplicado", quality.get("sgo_duplicado", 0))
+    q7.metric("Concluídos sem data", quality.get("concluidos_sem_data_entrega", 0), help="Status = Concluído, mas coluna V sem data válida. Não entra na produtividade.")
 
-    if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality.get("sgo_duplicado", 0) or quality.get("nota_duplicada", 0):
-        st.warning("Existem inconsistências que merecem revisão. Obras sem Postes Alterados/Novos ou SGO ficam bloqueadas para distribuição automática.")
+    if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality.get("sgo_duplicado", 0) or quality.get("nota_duplicada", 0) or quality.get("concluidos_sem_data_entrega", 0):
+        st.warning("Existem inconsistências que merecem revisão. Obras sem Postes Alterados/Novos ou SGO ficam bloqueadas para distribuição. Projetos Concluídos sem data na coluna V não entram na produtividade.")
 
     with st.expander("Obras bloqueadas para distribuição", expanded=True):
         blocked = prepared[
@@ -1468,6 +1525,19 @@ elif PAGE == "🔎 Dados e regras":
         else:
             st.dataframe(blocked, use_container_width=True, hide_index=True)
 
+    with st.expander("Concluídos sem Data de entrega do projeto (coluna V)", expanded=quality.get("concluidos_sem_data_entrega", 0) > 0):
+        missing_delivery = prepared[
+            prepared["status_norm"].isin(STATUS.completed_set) & prepared["completed_dt"].isna()
+        ][["note", "sgo", "assignee", "status", "posts", "regional", "municipality"]].rename(columns={
+            "note": "Nº da nota", "sgo": "Nota SGO", "assignee": "Projetista", "status": "Status",
+            "posts": POSTS_LABEL, "regional": "Regional", "municipality": "Município"
+        })
+        if missing_delivery.empty:
+            st.success("Todos os projetos Concluídos possuem Data de entrega válida na coluna V.")
+        else:
+            st.info("Estas obras estão Concluídas, mas não são contabilizadas na produtividade até a coluna V receber uma data válida.")
+            st.dataframe(missing_delivery, use_container_width=True, hide_index=True)
+
     if unlisted_names:
         with st.expander("Projetistas atribuídos que não estão na planilha PROJETISTAS"):
             st.write(unlisted_names)
@@ -1480,7 +1550,7 @@ elif PAGE == "🔎 Dados e regras":
         b4.metric("Diferença maior-menor", f'{balance["spread_posts"]:.0f} postes')
         st.caption("Equilíbrio mede a dispersão entre as carteiras. Cobertura média mostra o quanto da meta está efetivamente abastecido.")
 
-    with st.expander("Regras e parâmetros", expanded=True):
+    with st.expander("Detalhes técnicos das regras", expanded=False):
         st.markdown(
             f"""
             **Meta diária**: {TARGETS.target_posts} postes / {TARGETS.target_projects} projetos.  
@@ -1489,7 +1559,8 @@ elif PAGE == "🔎 Dados e regras":
             **Meta não cumulativa**: excedente de um dia não reduz a meta do dia seguinte.  
             **Carteira**: Status = Em projeto + Projetistas preenchido; peso = Postes Alterados/Novos (coluna R).  
             **Elegível para distribuição**: Em projeto + Projetistas vazio + Nota SGO + Postes Alterados/Novos válido.  
-            **Produção**: Data de entrega do projeto; Qtd. de poste final, com Postes Alterados/Novos como fallback.  
+            **Produção**: somente Status = Concluído **e** coluna V (Data de entrega do projeto) com data válida; Qtd. de poste final, com Postes Alterados/Novos como fallback.  
+            **Projeto acima da meta diária**: {"trava ativa" if OVERSIZE_LOCK_ENABLED else "trava desativada"}. Acima de {TARGETS.target_posts} postes, a distribuição automática exige carteira vazia e bloqueia novas atribuições enquanto a obra estiver Em projeto.  
             **Critério por experiência**: {"Ativo — " + EXPERIENCE_MODE if EXPERIENCE_ENABLED else "Desativado"}. Quando ativo, usa PI (Tipo Projeto) da coluna F.  
             **Jornada**: 08:00–12:00 e 13:12–18:00 ({TOTAL_WORK_MINUTES} minutos produtivos).
             """
@@ -1539,6 +1610,7 @@ elif PAGE == "🔎 Dados e regras":
             experience_mode=EXPERIENCE_MODE,
             designer_experience=designer_experience_map(),
             project_difficulty=project_difficulty_map(),
+            oversize_lock_enabled=OVERSIZE_LOCK_ENABLED,
         )
         audit = AuditStore("data/automation_audit.sqlite3")
         engine = AutomationEngine(TARGETS, STATUS, policy=policy, audit=audit)
