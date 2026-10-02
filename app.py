@@ -9,14 +9,15 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from openpyxl import load_workbook
+from openpyxl.styles import Font
 
 from src.audit_store import AuditStore
 from src.automation_engine import AutomationEngine, AutomationPolicy
 from src.demo_data import sample_designers_df, sample_projects
 from src.distribution_engine import suggest_assignments
-from src.excel_loader import load_base_excel, load_vu_excel, load_designers_excel
-from src.source_combiner import combine_levantamento_vu
-from src.excel_writer import generate_distributed_excel_bytes, generate_vu_distributed_excel_bytes
+from src.excel_loader import load_base_excel, load_designers_excel
+from src.excel_writer import generate_distributed_excel_bytes
 from src.experience_rules import (
     DIFFICULTY_LEVELS,
     EXPERIENCE_LEVELS,
@@ -606,6 +607,138 @@ if st.session_state.get("data_cleared_notice"):
 
 
 # -----------------------------------------------------------------------------
+# VU SUPPORT - SELF-CONTAINED DEPLOYMENT HELPERS
+# -----------------------------------------------------------------------------
+def _normalize_project_number(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    text = str(value).strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return text or None
+
+
+def load_vu_excel(source) -> pd.DataFrame:
+    """Read BASE LIST VU using only A = project number and C = status."""
+    raw = pd.read_excel(source, sheet_name=0, engine="openpyxl")
+    if raw.shape[1] < 3:
+        raise ValueError("A BASE LIST VU precisa possuir pelo menos as colunas A e C.")
+    project_col = raw.columns[0]
+    status_col = raw.columns[2]
+    out = pd.DataFrame(index=raw.index)
+    out["item_id"] = [f"excel-vu-{i + 2}" for i in range(len(raw))]
+    out["source_row"] = raw.index + 2
+    out["note"] = None
+    out["sgo"] = raw[project_col].map(_normalize_project_number)
+    out["status"] = raw[status_col].fillna("").astype(str).str.strip()
+    out["project_type"] = ""
+    out["regional"] = ""
+    out["municipality"] = ""
+    out["deadline"] = None
+    out["posts"] = 0
+    out["posts_valid"] = False
+    out["assignee"] = ""
+    out["completed_at"] = None
+    out["actual_posts"] = None
+    out["priority"] = "Normal"
+    out["reanalyzed_at"] = None
+    out["assigned_at"] = None
+    out["complexity"] = None
+    out["modified_at"] = None
+    out["etag"] = None
+    out["assignee_lookup_id"] = None
+    out["workload_known"] = False
+    return out
+
+
+def combine_levantamento_vu(levantamento: pd.DataFrame, vu: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Build one larger distribution pool from the two mandatory sources."""
+    if levantamento is None or vu is None or levantamento.empty or vu.empty:
+        return pd.DataFrame(), 0
+    lev = levantamento.copy()
+    vu_df = vu.copy()
+    vu_status = vu_df.get("status", pd.Series("", index=vu_df.index)).fillna("").astype(str).str.strip().str.casefold()
+    vu_pool = vu_df[vu_status.eq("em projeto")].copy()
+    lev_keys = {_normalize_project_number(v) for v in lev.get("sgo", pd.Series(dtype=object)).tolist()}
+    lev_keys.discard(None)
+    vu_keys = vu_pool.get("sgo", pd.Series("", index=vu_pool.index)).map(_normalize_project_number)
+    overlap_mask = vu_keys.isin(lev_keys) & vu_keys.notna()
+    overlap_count = int(overlap_mask.sum())
+    vu_unique = vu_pool[~overlap_mask].copy()
+    return pd.concat([lev, vu_unique], ignore_index=True), overlap_count
+
+
+def generate_vu_distributed_excel_bytes(
+    source_bytes: bytes,
+    suggestions: pd.DataFrame,
+    distribution_summary: pd.DataFrame | None = None,
+    target_posts: int = 30,
+    target_projects: int = 5,
+    generated_at: datetime | None = None,
+) -> bytes:
+    """Create a VU copy and write assignments without altering columns A or C."""
+    if not source_bytes:
+        raise ValueError("BASE LIST VU vazia ou não carregada.")
+    wb = load_workbook(BytesIO(source_bytes))
+    ws = wb[wb.sheetnames[0]]
+
+    # Find or create the assignment column. A and C are never changed.
+    assignee_col = None
+    accepted = {"projetista atribuído", "projetista atribuido", "projetistas", "projetista"}
+    for col in range(1, ws.max_column + 1):
+        header = str(ws.cell(1, col).value or "").strip().casefold()
+        if header in accepted:
+            assignee_col = col
+            break
+    if assignee_col is None:
+        assignee_col = max(4, ws.max_column + 1)
+        ws.cell(1, assignee_col).value = "Projetista atribuído"
+        ws.cell(1, assignee_col).font = Font(bold=True)
+
+    for _, row in suggestions.iterrows():
+        item_id = str(row.get("item_id", ""))
+        if not item_id.startswith("excel-vu-"):
+            continue
+        try:
+            excel_row = int(item_id.rsplit("-", 1)[1])
+        except Exception as exc:
+            raise ValueError(f"item_id VU inválido: {item_id}") from exc
+        current_status = str(ws.cell(excel_row, 3).value or "").strip().casefold()
+        if current_status != "em projeto":
+            raise ValueError(f"Linha {excel_row}: status VU não é 'Em projeto'.")
+        current_assignee = str(ws.cell(excel_row, assignee_col).value or "").strip()
+        if current_assignee:
+            raise ValueError(f"Linha {excel_row}: projeto VU já possui projetista '{current_assignee}'.")
+        ws.cell(excel_row, assignee_col).value = str(row["Projetista"])
+
+    # Add a lightweight audit sheet so the result is easy to review.
+    audit_name = "DISTRIBUICAO_AUTOMATICA"
+    if audit_name in wb.sheetnames:
+        del wb[audit_name]
+    audit = wb.create_sheet(audit_name)
+    headers = ["Gerado em", "Meta postes", "Meta projetos", "Projeto", "Projetista", "Base de origem"]
+    for idx, header in enumerate(headers, 1):
+        audit.cell(1, idx).value = header
+        audit.cell(1, idx).font = Font(bold=True)
+    generated_at = generated_at or datetime.now()
+    for r_idx, (_, row) in enumerate(suggestions.iterrows(), 2):
+        audit.cell(r_idx, 1).value = generated_at.strftime("%d/%m/%Y %H:%M:%S")
+        audit.cell(r_idx, 2).value = int(target_posts)
+        audit.cell(r_idx, 3).value = int(target_projects)
+        audit.cell(r_idx, 4).value = str(row.get("Nota SGO", row.get("sgo", "")) or "")
+        audit.cell(r_idx, 5).value = str(row.get("Projetista", ""))
+        audit.cell(r_idx, 6).value = "VU"
+
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+# -----------------------------------------------------------------------------
 # SOURCE INPUTS
 # -----------------------------------------------------------------------------
 def _tag_excel_source(df: pd.DataFrame, source_label: str) -> pd.DataFrame:
@@ -641,7 +774,7 @@ def render_excel_uploads():
         levantamento_upload = st.file_uploader(
             "BASE LIST LEVANTAMENTO (.xlsx)",
             type=["xlsx"],
-            key=f"base_list_levantamento_v19_{st.session_state.uploader_epoch}",
+            key=f"base_list_levantamento_v21_{st.session_state.uploader_epoch}",
             help="Base completa: Nota SGO, Status, Tipo Projeto, Postes Alterados/Novos, Projetista, Data de entrega etc.",
         )
         if levantamento_upload is not None:
@@ -667,7 +800,7 @@ def render_excel_uploads():
         vu_upload = st.file_uploader(
             "BASE LIST VU (Visualização Única) (.xlsx)",
             type=["xlsx"],
-            key=f"base_list_vu_v19_{st.session_state.uploader_epoch}",
+            key=f"base_list_vu_v21_{st.session_state.uploader_epoch}",
             help="A ferramenta lê somente A = número do projeto e C = status. Projetos 'Em projeto' entram como nova fonte da fila.",
         )
         if vu_upload is not None:
@@ -692,7 +825,7 @@ def render_excel_uploads():
 
     with col_proj:
         designer_upload = st.file_uploader(
-            "PROJETISTAS (.xlsx)", type=["xlsx"], key=f"designers_v19_{st.session_state.uploader_epoch}",
+            "PROJETISTAS (.xlsx)", type=["xlsx"], key=f"designers_v21_{st.session_state.uploader_epoch}",
             help="Lista oficial de projetistas que podem receber novas obras.",
         )
         if designer_upload is not None:

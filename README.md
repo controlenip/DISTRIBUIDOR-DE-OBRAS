@@ -1,8 +1,12 @@
-# NIP Smart Distribuicao - V20
+# NIP Smart Distribuição - V21
+
+**Correção de implantação Streamlit:** o suporte à BASE LIST VU foi incorporado ao próprio `app.py`, eliminando a dependência de uma função nova em `src/excel_loader.py`. Isso evita ImportError quando o repositório contém arquivos `src` de uma versão anterior.
+
+# NIP Smart Distribuicao - V21
 
 > **Deploy:** substitua o repositorio completo. Nao envie apenas `app.py`. A VU depende de `src/excel_loader.py`, `src/source_combiner.py` e `src/excel_writer.py` da mesma versao.
 
-## Novidade da V19: LEVANTAMENTO + VU são obrigatórias e complementares
+## Novidade da V21: LEVANTAMENTO + VU são obrigatórias e complementares
 
 No modo **Excel - validação**, a ferramenta só libera análise e distribuição quando os três arquivos abaixo estiverem carregados juntos:
 
