@@ -75,7 +75,7 @@ def _add_distribution_summary_sheet(
     ws["A1"] = "DISTRIBUIÇÃO AUTOMÁTICA DE OBRAS"
     ws["A1"].font = Font(bold=True, size=14, color="FFFFFF")
     ws["A1"].fill = PatternFill("solid", fgColor="1F4E78")
-    ws.merge_cells("A1:H1")
+    ws.merge_cells("A1:L1")
     ws["A2"] = "Gerado em"
     ws["B2"] = generated_at.strftime("%d/%m/%Y %H:%M:%S")
     ws["A3"] = "Meta diária"
@@ -84,7 +84,10 @@ def _add_distribution_summary_sheet(
     ws["B4"] = int(len(suggestions))
 
     start_row = 6
-    headers = ["Projetista", "Nº da nota", "Nota SGO", "PLN", "Regional", "Município", "Prazo", "Motivo"]
+    headers = [
+        "Projetista", "Nº da nota", "Nota SGO", "PLN", "Prioridade", "Regional", "Município", "Prazo",
+        "Carga antes", "Carga depois", "Projetos antes/depois", "Motivo"
+    ]
     for col, header in enumerate(headers, start=1):
         cell = ws.cell(start_row, col, header)
         cell.font = Font(bold=True, color="FFFFFF")
@@ -97,9 +100,13 @@ def _add_distribution_summary_sheet(
             row.get("Nº da nota"),
             row.get("Nota SGO"),
             row.get("PLN"),
+            row.get("Prioridade"),
             row.get("Regional"),
             row.get("Município"),
             row.get("Prazo"),
+            f'{row.get("Carga antes (postes)", "")} postes',
+            f'{row.get("Carga depois (postes)", "")} postes',
+            f'{row.get("Carga antes (projetos)", "")} → {row.get("Carga depois (projetos)", "")}',
             row.get("Motivo"),
         ]
         for c_idx, value in enumerate(values, start=1):
@@ -130,7 +137,10 @@ def _add_distribution_summary_sheet(
             for c_idx, col_name in enumerate(summary_cols, start=1):
                 ws.cell(r_idx, c_idx, row.get(col_name))
 
-    widths = {"A": 28, "B": 18, "C": 18, "D": 10, "E": 18, "F": 22, "G": 18, "H": 70}
+    widths = {
+        "A": 28, "B": 18, "C": 18, "D": 10, "E": 14, "F": 18, "G": 22, "H": 18,
+        "I": 16, "J": 16, "K": 20, "L": 70
+    }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A7"

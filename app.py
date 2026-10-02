@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 import hashlib
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -26,16 +27,21 @@ from src.metrics import (
 )
 from src.models import StatusConfig, Targets
 from src.name_utils import normalize_person_name
+from src.notifications import send_distribution_webhook
 from src.performance_analytics import (
+    daily_close_summary,
     designer_attention_table,
+    designer_daily_history,
     designer_monthly_prediction_advanced,
+    designer_quality_proxy,
     management_insights,
+    portfolio_balance_metrics,
 )
+from src.report_writer import generate_daily_close_excel
 from src.work_schedule import (
     TOTAL_WORK_MINUTES,
     current_work_status,
     format_minutes,
-    productive_minutes_elapsed,
     productive_minutes_remaining,
 )
 
@@ -54,20 +60,24 @@ st.markdown(
     """
     <style>
     :root {
+        --nip-navy:#0E2C4D;
         --nip-blue:#123B68;
-        --nip-blue2:#1F5D96;
+        --nip-blue2:#0D5EA6;
         --nip-cyan:#2D8FC7;
+        --nip-orange:#F97316;
+        --nip-orange2:#EA580C;
+        --nip-green:#15803D;
+        --nip-green2:#166534;
+        --nip-red:#DC2626;
+        --nip-red2:#B91C1C;
         --nip-soft:#F5F8FB;
         --nip-line:#DDE6EF;
-        --nip-green:#1F7A55;
-        --nip-orange:#B76A00;
-        --nip-red:#B42318;
     }
-    .block-container {padding-top: 1.2rem; padding-bottom: 2.5rem; max-width: 1500px;}
+    .block-container {padding-top: 1.1rem; padding-bottom: 2.5rem; max-width: 1500px;}
     [data-testid="stSidebar"] {background: linear-gradient(180deg,#0E2C4D 0%,#123B68 100%);}
     [data-testid="stSidebar"] * {color:#F4F8FC;}
     [data-testid="stSidebar"] [data-baseweb="radio"] label {
-        background:rgba(255,255,255,.04); border-radius:8px; padding:6px 8px;
+        background:rgba(255,255,255,.045); border-radius:8px; padding:6px 8px;
     }
     .hero {
         padding: 22px 26px; border-radius: 18px;
@@ -76,11 +86,11 @@ st.markdown(
     }
     .hero h1 {font-size: 2rem; margin:0; line-height:1.1;}
     .hero p {margin:8px 0 0 0; opacity:.92; font-size:1rem;}
-    .section-title {font-size:1.15rem; font-weight:750; color:#123B68; margin:6px 0 10px;}
+    .section-title {font-size:1.16rem; font-weight:780; color:#123B68; margin:8px 0 10px;}
     .subtle {color:#5E7185; font-size:.94rem;}
     .step-card {
         border:1px solid var(--nip-line); border-radius:14px; padding:16px 18px;
-        background:#FFFFFF; min-height:105px; box-shadow:0 2px 8px rgba(15,42,68,.04);
+        background:#FFFFFF; min-height:108px; box-shadow:0 2px 8px rgba(15,42,68,.04);
     }
     .step-card .num {
         display:inline-flex; width:28px; height:28px; border-radius:50%;
@@ -92,12 +102,30 @@ st.markdown(
     .info-card {padding:14px 16px; border:1px solid var(--nip-line); border-radius:12px; background:#F8FAFC; margin-bottom:9px;}
     .success-card {padding:15px 18px; border:1px solid #B8E2CB; border-radius:12px; background:#F1FBF5;}
     .warning-card {padding:15px 18px; border:1px solid #F2D2A4; border-radius:12px; background:#FFF8ED;}
+    .danger-card {padding:15px 18px; border:1px solid #F1B8B8; border-radius:12px; background:#FFF4F4;}
     .rule-card {padding:15px 18px; border-left:4px solid #2D8FC7; border-radius:9px; background:#F5F9FC;}
     div[data-testid="stMetric"] {background:#FFFFFF; border:1px solid #E3EAF1; padding:12px 14px; border-radius:13px; box-shadow:0 2px 9px rgba(15,42,68,.05);}
     div[data-testid="stMetric"] label {font-weight:650; color:#486176;}
     div[data-testid="stMetric"] [data-testid="stMetricValue"] {color:#123B68; font-weight:780;}
-    .stButton > button[kind="primary"] {border-radius:10px; font-weight:750; min-height:47px;}
-    .stDownloadButton > button {border-radius:10px; font-weight:750; min-height:45px;}
+
+    /* Main action buttons: blue by default, orange for primary actions. */
+    .stButton > button {border-radius:10px; font-weight:760; min-height:45px; border:1px solid #0D5EA6;}
+    .stButton > button:not([kind="primary"]) {background:#0D5EA6; color:#FFFFFF;}
+    .stButton > button:not([kind="primary"]):hover {background:#094B87; color:#FFFFFF; border-color:#094B87;}
+    .stButton > button[kind="primary"] {background:#F97316; color:#FFFFFF; border-color:#F97316; min-height:48px;}
+    .stButton > button[kind="primary"]:hover {background:#EA580C; color:#FFFFFF; border-color:#EA580C;}
+
+    /* Downloads are success actions. */
+    .stDownloadButton > button {border-radius:10px; font-weight:780; min-height:46px; background:#15803D; color:#FFFFFF; border:1px solid #15803D;}
+    .stDownloadButton > button:hover {background:#166534; color:#FFFFFF; border-color:#166534;}
+
+    /* The sidebar action is intentionally red so 'Limpar dados' is obvious. */
+    [data-testid="stSidebar"] .stButton > button:not([kind="primary"]) {background:#1F5D96 !important; color:#FFFFFF !important; border:1px solid #2D8FC7 !important; font-weight:750 !important;}
+    [data-testid="stSidebar"] .stButton > button:not([kind="primary"]):hover {background:#174B79 !important; border-color:#2D8FC7 !important;}
+    [data-testid="stSidebar"] .stButton > button[kind="primary"] {background:#DC2626 !important; color:#FFFFFF !important; border:1px solid #DC2626 !important; font-weight:850 !important;}
+    [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {background:#B91C1C !important; border-color:#B91C1C !important;}
+    [data-testid="stSidebar"] .stButton > button:disabled {background:#6B7280 !important; color:#E5E7EB !important; border-color:#6B7280 !important; opacity:.8;}
+
     [data-baseweb="tab-list"] {gap:5px; flex-wrap:wrap;}
     [data-baseweb="tab"] {border-radius:9px 9px 0 0; padding-left:12px; padding-right:12px;}
     </style>
@@ -147,7 +175,7 @@ def fmt_num(value) -> str:
 def status_badge(status: str) -> str:
     mapping = {
         "Meta atingida": "✅ Meta atingida",
-        "Faixa mínima atingida": "🟢 Faixa mínima atingida",
+        "Faixa mínima atingida": "🟢 Faixa mínima",
         "Carteira suficiente": "🔵 Carteira suficiente",
         "Falta de carga": "🟠 Precisa de mais obras",
         "Risco produtivo": "🔴 Risco de não atingir",
@@ -161,7 +189,6 @@ def compact_load_table(baseline: pd.DataFrame, target_posts: int, target_project
     columns = ["Projetista", "Carteira atual", "Ainda precisa", "Cobertura da carteira", "Situação"]
     if baseline.empty:
         return pd.DataFrame(columns=columns)
-
     df = baseline.copy()
     for col in ["Projetos já atribuídos", "PLN já atribuído", "Projetos sem PLN", "Meta restante postes", "Meta restante projetos"]:
         if col not in df.columns:
@@ -196,22 +223,16 @@ def compact_load_config():
         "Carteira atual": st.column_config.TextColumn("Carteira atual", width="medium"),
         "Ainda precisa": st.column_config.TextColumn("Ainda precisa", width="medium"),
         "Cobertura da carteira": st.column_config.ProgressColumn(
-            "Cobertura da carteira",
-            help="Quanto da meta de 30 postes e 5 projetos já está coberto pelas obras atualmente atribuídas.",
-            min_value=0,
-            max_value=100,
-            format="%d%%",
-            width="medium",
+            "Cobertura da carteira", min_value=0, max_value=100, format="%d%%", width="medium",
         ),
         "Situação": st.column_config.TextColumn("Situação", width="medium"),
     }
 
 
-def compact_daily_table(snapshot: pd.DataFrame, target_posts: int, target_projects: int, current_day: bool) -> pd.DataFrame:
+def compact_daily_table(snapshot: pd.DataFrame, target_posts: int, target_projects: int) -> pd.DataFrame:
     columns = ["Projetista", "Fez no dia", "Carteira atual", "Falta para a meta", "Estimativa", "Situação"]
     if snapshot.empty:
         return pd.DataFrame(columns=columns)
-
     df = snapshot.copy()
     numeric_cols = [
         "Postes realizados", "Projetos realizados", "Postes em carteira", "Projetos em carteira",
@@ -221,31 +242,21 @@ def compact_daily_table(snapshot: pd.DataFrame, target_posts: int, target_projec
         if col not in df.columns:
             df[col] = 0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-    df["Fez no dia"] = df.apply(
-        lambda r: f'{fmt_num(r["Postes realizados"])} postes • {fmt_num(r["Projetos realizados"])} projetos', axis=1
-    )
-    df["Carteira atual"] = df.apply(
-        lambda r: f'{fmt_num(r["Postes em carteira"])} postes • {fmt_num(r["Projetos em carteira"])} projetos', axis=1
-    )
-    df["Falta para a meta"] = df.apply(
-        lambda r: f'{fmt_num(max(0, target_posts-r["Postes realizados"]))} postes • {fmt_num(max(0, target_projects-r["Projetos realizados"]))} projetos', axis=1
-    )
-    df["Estimativa"] = df.apply(
-        lambda r: f'{fmt_num(r["Previsão postes 18h"])} postes • {fmt_num(r["Previsão projetos 18h"])} projetos', axis=1
-    )
+    df["Fez no dia"] = df.apply(lambda r: f'{fmt_num(r["Postes realizados"])} postes • {fmt_num(r["Projetos realizados"])} projetos', axis=1)
+    df["Carteira atual"] = df.apply(lambda r: f'{fmt_num(r["Postes em carteira"])} postes • {fmt_num(r["Projetos em carteira"])} projetos', axis=1)
+    df["Falta para a meta"] = df.apply(lambda r: f'{fmt_num(max(0, target_posts-r["Postes realizados"]))} postes • {fmt_num(max(0, target_projects-r["Projetos realizados"]))} projetos', axis=1)
+    df["Estimativa"] = df.apply(lambda r: f'{fmt_num(r["Previsão postes 18h"])} postes • {fmt_num(r["Previsão projetos 18h"])} projetos', axis=1)
     df["Situação"] = df["Situação"].map(status_badge)
     return df[columns]
 
 
 def compact_daily_config(current_day: bool):
-    estimate_name = "Estimativa até 18h" if current_day else "Fechamento do dia"
     return {
         "Projetista": st.column_config.TextColumn("Projetista", width="large"),
         "Fez no dia": st.column_config.TextColumn("Fez no dia", width="medium"),
         "Carteira atual": st.column_config.TextColumn("Carteira atual", width="medium"),
         "Falta para a meta": st.column_config.TextColumn("Falta para a meta", width="medium"),
-        "Estimativa": st.column_config.TextColumn(estimate_name, width="medium"),
+        "Estimativa": st.column_config.TextColumn("Estimativa até 18h" if current_day else "Fechamento do dia", width="medium"),
         "Situação": st.column_config.TextColumn("Situação", width="medium"),
     }
 
@@ -258,23 +269,103 @@ def render_insights(items: list[str], max_items: int = 4):
         st.markdown(f'<div class="info-card">💡 {item}</div>', unsafe_allow_html=True)
 
 
+def reset_generated_output():
+    st.session_state.generated_excel_bytes = b""
+    st.session_state.generated_excel_name = ""
+    st.session_state.generated_distribution_suggestions = pd.DataFrame()
+    st.session_state.generated_distribution_summary = pd.DataFrame()
+
+
+def reset_simulation():
+    st.session_state.simulated_suggestions = pd.DataFrame()
+    st.session_state.simulated_summary = pd.DataFrame()
+    st.session_state.simulation_signature = ""
+    st.session_state.simulation_cycle_id = ""
+    reset_generated_output()
+
+
 # -----------------------------------------------------------------------------
-# CONFIGURATION
+# CONFIGURATION + SESSION
 # -----------------------------------------------------------------------------
 SECRETS = secrets_dict()
 TIMEZONE = nested(SECRETS, "app", "timezone", default="America/Fortaleza")
-TARGETS = Targets(
-    min_posts=int(nested(SECRETS, "app", "min_posts", default=25)),
-    target_posts=int(nested(SECRETS, "app", "target_posts", default=30)),
-    min_projects=int(nested(SECRETS, "app", "min_projects", default=4)),
-    target_projects=int(nested(SECRETS, "app", "target_projects", default=5)),
-)
+BASE_DEFAULTS = {
+    "min_posts": int(nested(SECRETS, "app", "min_posts", default=25)),
+    "target_posts": int(nested(SECRETS, "app", "target_posts", default=30)),
+    "min_projects": int(nested(SECRETS, "app", "min_projects", default=4)),
+    "target_projects": int(nested(SECRETS, "app", "target_projects", default=5)),
+    "max_portfolio_posts": int(nested(SECRETS, "app", "max_portfolio_posts", default=36)),
+    "max_portfolio_projects": int(nested(SECRETS, "app", "max_portfolio_projects", default=6)),
+    "priority_enabled": bool(nested(SECRETS, "app", "priority_enabled", default=True)),
+}
+
+SESSION_DEFAULTS = {
+    "demo_projects": sample_projects(TIMEZONE),
+    "excel_projects": pd.DataFrame(),
+    "uploaded_designers": pd.DataFrame(),
+    "graph_projects": pd.DataFrame(),
+    "last_sync": None,
+    "column_diagnostics": pd.DataFrame(),
+    "base_excel_bytes": b"",
+    "base_excel_name": "",
+    "base_excel_signature": "",
+    "designers_signature": "",
+    "generated_excel_bytes": b"",
+    "generated_excel_name": "",
+    "generated_distribution_suggestions": pd.DataFrame(),
+    "generated_distribution_summary": pd.DataFrame(),
+    "simulated_suggestions": pd.DataFrame(),
+    "simulated_summary": pd.DataFrame(),
+    "simulation_signature": "",
+    "simulation_cycle_id": "",
+    "uploader_epoch": 0,
+    "data_cleared_notice": False,
+    "admin_authenticated": False,
+    "notify_after_distribution": False,
+    "auto_sync_lists": False,
+    "cfg_min_posts": BASE_DEFAULTS["min_posts"],
+    "cfg_target_posts": BASE_DEFAULTS["target_posts"],
+    "cfg_min_projects": BASE_DEFAULTS["min_projects"],
+    "cfg_target_projects": BASE_DEFAULTS["target_projects"],
+    "cfg_max_portfolio_posts": BASE_DEFAULTS["max_portfolio_posts"],
+    "cfg_max_portfolio_projects": BASE_DEFAULTS["max_portfolio_projects"],
+    "cfg_priority_enabled": BASE_DEFAULTS["priority_enabled"],
+}
+for key, default in SESSION_DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+
+def clear_working_data():
+    st.session_state.demo_projects = sample_projects(TIMEZONE)
+    st.session_state.excel_projects = pd.DataFrame()
+    st.session_state.uploaded_designers = pd.DataFrame()
+    st.session_state.graph_projects = pd.DataFrame()
+    st.session_state.last_sync = None
+    st.session_state.column_diagnostics = pd.DataFrame()
+    st.session_state.base_excel_bytes = b""
+    st.session_state.base_excel_name = ""
+    st.session_state.base_excel_signature = ""
+    st.session_state.designers_signature = ""
+    reset_simulation()
+    st.session_state.pop("last_auto_result", None)
+    st.session_state.uploader_epoch = int(st.session_state.get("uploader_epoch", 0)) + 1
+    st.session_state.data_cleared_notice = True
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+ADMIN_PIN = str(nested(SECRETS, "access", "admin_pin", default="") or "")
+DEFAULT_ROLE = str(nested(SECRETS, "access", "default_role", default="Administrador") or "Administrador")
+WRITE_ENABLED = bool(nested(SECRETS, "app", "write_enabled", default=False))
+WEBHOOK_URL = str(nested(SECRETS, "notifications", "webhook_url", default="") or "")
+
 STATUS = StatusConfig(
     project_pool=tuple(nested(SECRETS, "lists", "status", "project_pool", default=["Em projeto"])),
     completed=tuple(nested(SECRETS, "lists", "status", "completed", default=["Concluído", "Concluido"])),
 )
-WRITE_ENABLED = bool(nested(SECRETS, "app", "write_enabled", default=False))
-
 FIELD_MAP = FieldMap(
     note=nested(SECRETS, "lists", "fields", "note", default="N° da nota"),
     sgo=nested(SECRETS, "lists", "fields", "sgo", default="Nota SGO"),
@@ -288,7 +379,6 @@ FIELD_MAP = FieldMap(
     actual_posts=nested(SECRETS, "lists", "fields", "actual_posts", default="Qtd. de poste"),
     priority=nested(SECRETS, "lists", "fields", "priority", default="Prioridade"),
 )
-
 GRAPH_CONFIG = {
     "tenant_id": nested(SECRETS, "graph", "tenant_id", default=""),
     "client_id": nested(SECRETS, "graph", "client_id", default=""),
@@ -308,64 +398,8 @@ def make_repository() -> ListsProjectRepository:
     return ListsProjectRepository(graph, GRAPH_CONFIG["site_id"], GRAPH_CONFIG["list_id"], FIELD_MAP)
 
 
-for key, default in {
-    "demo_projects": sample_projects(TIMEZONE),
-    "excel_projects": pd.DataFrame(),
-    "uploaded_designers": pd.DataFrame(),
-    "graph_projects": pd.DataFrame(),
-    "last_sync": None,
-    "column_diagnostics": pd.DataFrame(),
-    "base_excel_bytes": b"",
-    "base_excel_name": "",
-    "base_excel_signature": "",
-    "designers_signature": "",
-    "request_auto_distribution": False,
-    "generated_excel_bytes": b"",
-    "generated_excel_name": "",
-    "generated_distribution_suggestions": pd.DataFrame(),
-    "generated_distribution_summary": pd.DataFrame(),
-    "uploader_epoch": 0,
-    "data_cleared_notice": False,
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-
-def clear_working_data():
-    """Return the app to a clean state without changing configuration/secrets."""
-    st.session_state.demo_projects = sample_projects(TIMEZONE)
-    st.session_state.excel_projects = pd.DataFrame()
-    st.session_state.uploaded_designers = pd.DataFrame()
-    st.session_state.graph_projects = pd.DataFrame()
-    st.session_state.last_sync = None
-    st.session_state.column_diagnostics = pd.DataFrame()
-    st.session_state.base_excel_bytes = b""
-    st.session_state.base_excel_name = ""
-    st.session_state.base_excel_signature = ""
-    st.session_state.designers_signature = ""
-    st.session_state.request_auto_distribution = False
-    st.session_state.generated_excel_bytes = b""
-    st.session_state.generated_excel_name = ""
-    st.session_state.generated_distribution_suggestions = pd.DataFrame()
-    st.session_state.generated_distribution_summary = pd.DataFrame()
-    st.session_state.pop("last_auto_result", None)
-
-    # Force file uploaders to be recreated with fresh widget keys.
-    st.session_state.uploader_epoch = int(st.session_state.get("uploader_epoch", 0)) + 1
-    st.session_state.data_cleared_notice = True
-
-    # Clear cached data, if any helper has been cached in future versions.
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-
-NOW = datetime.now(ZoneInfo(TIMEZONE))
-
-
 # -----------------------------------------------------------------------------
-# SIDEBAR: SIMPLE NAVIGATION FIRST, TECHNICAL OPTIONS SECOND
+# SIDEBAR
 # -----------------------------------------------------------------------------
 st.sidebar.markdown("## ⚡ NIP Smart")
 st.sidebar.caption("Distribuição de obras e produtividade")
@@ -374,56 +408,84 @@ PAGE = st.sidebar.radio(
     "Menu",
     ["🏠 Início", "⚡ Distribuir obras", "👷 Produtividade", "🔎 Dados e regras"],
     index=0,
+    key="nav_page",
 )
+
+st.sidebar.divider()
+role_choice = st.sidebar.selectbox("Perfil", ["Administrador", "Consulta"], index=0 if DEFAULT_ROLE == "Administrador" else 1)
+if role_choice == "Administrador" and ADMIN_PIN:
+    if not st.session_state.admin_authenticated:
+        pin_value = st.sidebar.text_input("PIN do administrador", type="password")
+        if st.sidebar.button("🔐 Liberar administração", use_container_width=True):
+            if pin_value == ADMIN_PIN:
+                st.session_state.admin_authenticated = True
+                st.rerun()
+            else:
+                st.sidebar.error("PIN inválido")
+    CAN_EDIT = bool(st.session_state.admin_authenticated)
+else:
+    CAN_EDIT = role_choice == "Administrador"
+
+st.sidebar.caption("Modo: **Administrador**" if CAN_EDIT else "Modo: **Consulta**")
 
 st.sidebar.divider()
 st.sidebar.markdown("**Como usar**")
 st.sidebar.caption("1. Carregue as duas planilhas")
-st.sidebar.caption("2. Gere a distribuição")
-st.sidebar.caption("3. Baixe a nova BASE LIST")
+st.sidebar.caption("2. Simule e confira")
+st.sidebar.caption("3. Gere e baixe a nova BASE LIST")
 
 st.sidebar.divider()
-if st.sidebar.button(
-    "🧹 Limpar dados",
-    use_container_width=True,
-    help="Remove os arquivos carregados e todos os resultados temporários desta sessão.",
-):
+if st.sidebar.button("🧹 LIMPAR DADOS", type="primary", use_container_width=True, help="Apaga arquivos e resultados temporários desta sessão."):
     clear_working_data()
     st.rerun()
 
-with st.sidebar.expander("Opções avançadas"):
+with st.sidebar.expander("⚙️ Opções avançadas"):
     source_mode = st.selectbox("Fonte de dados", ["Excel - validação", "Microsoft Lists", "DEMO"], index=0)
     st.caption("Use Microsoft Lists somente quando a integração real estiver configurada.")
 
+    if CAN_EDIT:
+        st.markdown("**Parâmetros da distribuição**")
+        st.session_state.cfg_target_posts = st.number_input("Meta postes/dia", min_value=1, max_value=200, value=int(st.session_state.cfg_target_posts))
+        st.session_state.cfg_target_projects = st.number_input("Meta projetos/dia", min_value=1, max_value=30, value=int(st.session_state.cfg_target_projects))
+        st.session_state.cfg_min_posts = st.number_input("Faixa mínima - postes", min_value=1, max_value=int(st.session_state.cfg_target_posts), value=min(int(st.session_state.cfg_min_posts), int(st.session_state.cfg_target_posts)))
+        st.session_state.cfg_min_projects = st.number_input("Faixa mínima - projetos", min_value=1, max_value=int(st.session_state.cfg_target_projects), value=min(int(st.session_state.cfg_min_projects), int(st.session_state.cfg_target_projects)))
+        st.session_state.cfg_max_portfolio_posts = st.number_input("Teto de carteira - postes", min_value=int(st.session_state.cfg_target_posts), max_value=300, value=max(int(st.session_state.cfg_max_portfolio_posts), int(st.session_state.cfg_target_posts)))
+        st.session_state.cfg_max_portfolio_projects = st.number_input("Teto de carteira - projetos", min_value=int(st.session_state.cfg_target_projects), max_value=40, value=max(int(st.session_state.cfg_max_portfolio_projects), int(st.session_state.cfg_target_projects)))
+        st.session_state.cfg_priority_enabled = st.toggle("Considerar Prioridade e Prazo", value=bool(st.session_state.cfg_priority_enabled))
+        if WEBHOOK_URL:
+            st.session_state.notify_after_distribution = st.toggle("Notificar após gerar distribuição", value=bool(st.session_state.notify_after_distribution))
+
+TARGETS = Targets(
+    min_posts=int(st.session_state.cfg_min_posts),
+    target_posts=int(st.session_state.cfg_target_posts),
+    min_projects=int(st.session_state.cfg_min_projects),
+    target_projects=int(st.session_state.cfg_target_projects),
+)
+MAX_PORTFOLIO_POSTS = int(st.session_state.cfg_max_portfolio_posts)
+MAX_PORTFOLIO_PROJECTS = int(st.session_state.cfg_max_portfolio_projects)
+PRIORITY_ENABLED = bool(st.session_state.cfg_priority_enabled)
+
 st.sidebar.divider()
 st.sidebar.caption(
-    f"Meta diária: **{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos**  \n"
-    f"Faixa mínima: **{TARGETS.min_posts} postes / {TARGETS.min_projects} projetos**"
+    f"Meta: **{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos**  \n"
+    f"Teto de carteira: **{MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos**"
 )
 
+NOW = datetime.now(ZoneInfo(TIMEZONE))
 analysis_date = NOW.date()
 if PAGE == "👷 Produtividade":
-    analysis_date = st.sidebar.date_input(
-        "Data da produtividade",
-        value=NOW.date(),
-        max_value=NOW.date(),
-        help="Use para consultar um dia anterior. Para o dia atual, a ferramenta considera o horário corrente.",
-    )
-
-if analysis_date == NOW.date():
-    ANALYSIS_NOW = NOW
-else:
-    ANALYSIS_NOW = datetime.combine(analysis_date, time(18, 0), tzinfo=ZoneInfo(TIMEZONE))
+    analysis_date = st.sidebar.date_input("Data da produtividade", value=NOW.date(), max_value=NOW.date())
+ANALYSIS_NOW = NOW if analysis_date == NOW.date() else datetime.combine(analysis_date, time(18, 0), tzinfo=ZoneInfo(TIMEZONE))
 
 
 # -----------------------------------------------------------------------------
 # HERO
 # -----------------------------------------------------------------------------
 page_subtitles = {
-    "🏠 Início": "Carregue as bases, entenda a carga atual da equipe e faça a distribuição em poucos passos.",
-    "⚡ Distribuir obras": "Veja o que está disponível, como a carga será equilibrada e gere a planilha distribuída.",
-    "👷 Produtividade": "Acompanhe quem cumpriu a meta, quem precisa de atenção e a tendência semanal e mensal.",
-    "🔎 Dados e regras": "Consulte qualidade da base, regras da distribuição e opções técnicas sem poluir a operação diária.",
+    "🏠 Início": "Carregue as bases, veja a situação da equipe e siga o fluxo guiado até o download.",
+    "⚡ Distribuir obras": "Simule, confira, ajuste e só depois gere a distribuição definitiva.",
+    "👷 Produtividade": "Acompanhe metas, consistência, histórico individual e projeções.",
+    "🔎 Dados e regras": "Valide a base, consulte auditoria, regras e integrações técnicas.",
 }
 st.markdown(
     f"""
@@ -434,31 +496,21 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 if st.session_state.get("data_cleared_notice"):
-    st.success("🧹 Dados limpos. A ferramenta está pronta para receber uma nova BASE LIST e uma nova lista de projetistas.")
+    st.success("🧹 Dados limpos. A sessão voltou ao estado inicial.")
     st.session_state.data_cleared_notice = False
 
 
 # -----------------------------------------------------------------------------
 # SOURCE INPUTS
 # -----------------------------------------------------------------------------
-def reset_generated_output():
-    st.session_state.generated_excel_bytes = b""
-    st.session_state.generated_excel_name = ""
-    st.session_state.generated_distribution_suggestions = pd.DataFrame()
-    st.session_state.generated_distribution_summary = pd.DataFrame()
-
-
 def render_excel_uploads():
     st.markdown('<div class="section-title">Passo 1 — Carregue os arquivos</div>', unsafe_allow_html=True)
-    st.caption("Você precisa de dois arquivos: a BASE LIST exportada e a lista de projetistas que podem receber obras.")
+    st.caption("BASE LIST exportada + lista de projetistas habilitados a receber obras.")
     left, right = st.columns(2)
     with left:
         base_upload = st.file_uploader(
-            "BASE LIST (.xlsx)",
-            type=["xlsx"],
-            key=f"base_list_main_v11_{st.session_state.uploader_epoch}",
+            "BASE LIST (.xlsx)", type=["xlsx"], key=f"base_list_v12_{st.session_state.uploader_epoch}",
             help="Arquivo exportado do Microsoft Lists com as obras.",
         )
         if base_upload is not None:
@@ -466,7 +518,7 @@ def render_excel_uploads():
                 base_bytes = base_upload.getvalue()
                 sig = hashlib.sha256(base_bytes).hexdigest()
                 if sig != st.session_state.base_excel_signature:
-                    reset_generated_output()
+                    reset_simulation()
                 st.session_state.base_excel_bytes = base_bytes
                 st.session_state.base_excel_name = base_upload.name
                 st.session_state.base_excel_signature = sig
@@ -476,17 +528,15 @@ def render_excel_uploads():
                 st.error(f"Não foi possível ler a BASE LIST: {exc}")
     with right:
         designer_upload = st.file_uploader(
-            "PROJETISTAS (.xlsx)",
-            type=["xlsx"],
-            key=f"designers_main_v11_{st.session_state.uploader_epoch}",
-            help="Lista de projetistas que podem receber novas obras.",
+            "PROJETISTAS (.xlsx)", type=["xlsx"], key=f"designers_v12_{st.session_state.uploader_epoch}",
+            help="Lista oficial de projetistas que podem receber novas obras.",
         )
         if designer_upload is not None:
             try:
                 designer_bytes = designer_upload.getvalue()
                 sig = hashlib.sha256(designer_bytes).hexdigest()
                 if sig != st.session_state.designers_signature:
-                    reset_generated_output()
+                    reset_simulation()
                 st.session_state.designers_signature = sig
                 st.session_state.uploaded_designers = load_designers_excel(designer_upload)
                 st.success(f"✅ Lista pronta — {len(st.session_state.uploaded_designers)} projetistas")
@@ -494,9 +544,16 @@ def render_excel_uploads():
                 st.error(f"Não foi possível ler PROJETISTAS.xlsx: {exc}")
 
 
+def sync_lists_now():
+    repo = make_repository()
+    st.session_state.graph_projects = repo.fetch_projects()
+    st.session_state.column_diagnostics = repo.column_diagnostics()
+    st.session_state.last_sync = datetime.now(ZoneInfo(TIMEZONE))
+
+
 def render_lists_input():
     st.markdown('<div class="section-title">Conexão com Microsoft Lists</div>', unsafe_allow_html=True)
-    designer_upload = st.file_uploader("PROJETISTAS.xlsx", type=["xlsx"], key=f"designers_lists_v11_{st.session_state.uploader_epoch}")
+    designer_upload = st.file_uploader("PROJETISTAS.xlsx", type=["xlsx"], key=f"designers_lists_v12_{st.session_state.uploader_epoch}")
     if designer_upload is not None:
         try:
             st.session_state.uploaded_designers = load_designers_excel(designer_upload)
@@ -505,15 +562,15 @@ def render_lists_input():
             st.error(f"Falha ao ler PROJETISTAS.xlsx: {exc}")
     if not GRAPH_READY:
         st.warning("A integração com Microsoft Lists ainda não está configurada nos Secrets do Streamlit.")
-    elif st.button("🔄 Atualizar dados do Microsoft Lists", use_container_width=True):
+        return
+    if st.button("🔄 Atualizar dados do Microsoft Lists", use_container_width=True):
         try:
-            repo = make_repository()
-            st.session_state.graph_projects = repo.fetch_projects()
-            st.session_state.column_diagnostics = repo.column_diagnostics()
-            st.session_state.last_sync = datetime.now(ZoneInfo(TIMEZONE))
-            st.success("Dados atualizados com sucesso.")
+            sync_lists_now()
+            st.success("Microsoft Lists atualizado.")
         except Exception as exc:
-            st.error(str(exc))
+            st.error(f"Falha ao sincronizar: {exc}")
+    if CAN_EDIT:
+        st.session_state.auto_sync_lists = st.toggle("Atualizar automaticamente a cada 5 minutos", value=bool(st.session_state.auto_sync_lists))
 
 
 if PAGE == "🏠 Início":
@@ -522,7 +579,6 @@ if PAGE == "🏠 Início":
     elif source_mode == "Microsoft Lists":
         render_lists_input()
 
-# Resolve source after potential uploads
 if source_mode == "Excel - validação":
     projects = st.session_state.excel_projects.copy()
     designers_df = st.session_state.uploaded_designers.copy()
@@ -536,12 +592,23 @@ else:
 DESIGNERS = designers_df["name"].tolist() if not designers_df.empty else []
 source_ready = bool(DESIGNERS) and not projects.empty
 
+if source_mode == "Microsoft Lists" and GRAPH_READY and st.session_state.auto_sync_lists:
+    @st.fragment(run_every="5m")
+    def _lists_auto_sync_fragment():
+        try:
+            sync_lists_now()
+            stamp = st.session_state.last_sync.strftime("%H:%M:%S") if st.session_state.last_sync else "-"
+            st.caption(f"🔄 Sincronização automática ativa • última leitura {stamp}")
+        except Exception as exc:
+            st.caption(f"⚠️ Falha na sincronização automática: {exc}")
+    _lists_auto_sync_fragment()
+
 if not source_ready:
     if PAGE != "🏠 Início":
         st.warning("Comece pela página **Início** e carregue a BASE LIST e a planilha PROJETISTAS.")
     else:
         if source_mode == "Excel - validação":
-            st.info("Assim que os dois arquivos forem carregados, o resumo da equipe e o botão de distribuição serão liberados.")
+            st.info("Assim que os dois arquivos forem carregados, a análise e os botões de distribuição serão liberados.")
         elif source_mode == "Microsoft Lists":
             st.info("Carregue PROJETISTAS.xlsx e sincronize o Microsoft Lists para continuar.")
     st.stop()
@@ -559,6 +626,7 @@ week = weekly_metrics(projects, DESIGNERS, ANALYSIS_NOW, TARGETS, STATUS, TIMEZO
 month = monthly_metrics(projects, DESIGNERS, ANALYSIS_NOW, TARGETS, STATUS, TIMEZONE)
 designer_pred = designer_monthly_prediction_advanced(projects, DESIGNERS, ANALYSIS_NOW, TARGETS, STATUS, TIMEZONE)
 designer_attention = designer_attention_table(analysis_snapshot, TARGETS.target_posts, TARGETS.target_projects)
+balance = portfolio_balance_metrics(baseline, TARGETS.target_posts, TARGETS.target_projects)
 
 eligible_norm = {normalize_person_name(n) for n in DESIGNERS}
 pool_assigned = prepared[prepared["status_norm"].isin(STATUS.project_pool_set) & (prepared["assignee_norm"] != "")]
@@ -566,7 +634,6 @@ unlisted_names = sorted({
     name for name, norm in zip(pool_assigned["assignee"], pool_assigned["assignee_norm"])
     if norm not in eligible_norm
 })
-
 eligible_available = prepared[
     prepared["status_norm"].isin(STATUS.project_pool_set)
     & (prepared["assignee_norm"] == "")
@@ -579,29 +646,117 @@ pending_pln = int((baseline["Projetos sem PLN"] > 0).sum())
 partial_load = int(((baseline["Projetos já atribuídos"] > 0) & ((baseline["Meta restante postes"] > 0) | (baseline["Meta restante projetos"] > 0))).sum())
 covered_load = int(((baseline["Projetos sem PLN"] == 0) & (baseline["Meta restante postes"] == 0) & (baseline["Meta restante projetos"] == 0)).sum())
 
-elapsed = productive_minutes_elapsed(NOW, TIMEZONE)
-remaining = productive_minutes_remaining(NOW, TIMEZONE)
 
-live_suggestions, live_distribution_summary = suggest_assignments(projects, live_snapshot, TARGETS, STATUS)
+def current_simulation_signature() -> str:
+    raw = "|".join([
+        st.session_state.base_excel_signature or source_mode,
+        st.session_state.designers_signature or str(len(DESIGNERS)),
+        str(TARGETS.target_posts), str(TARGETS.target_projects),
+        str(MAX_PORTFOLIO_POSTS), str(MAX_PORTFOLIO_PROJECTS), str(PRIORITY_ENABLED),
+    ])
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def generate_distribution_file():
+def compute_distribution():
+    return suggest_assignments(
+        projects, live_snapshot, TARGETS, STATUS,
+        max_new_projects_per_designer=MAX_PORTFOLIO_PROJECTS,
+        max_portfolio_posts=MAX_PORTFOLIO_POSTS,
+        max_portfolio_projects=MAX_PORTFOLIO_PROJECTS,
+        priority_enabled=PRIORITY_ENABLED,
+        respect_time=False,
+    )
+
+
+def recalculate_manual_simulation(df: pd.DataFrame) -> pd.DataFrame:
+    """Recalculate before/after load when the coordinator changes a simulated assignee."""
+    if df.empty:
+        return df.copy()
+    result = df.copy().reset_index(drop=True)
+    base_posts = baseline.set_index("Projetista")["PLN já atribuído"].to_dict()
+    base_projects = baseline.set_index("Projetista")["Projetos já atribuídos"].to_dict()
+    original_map = {}
+    if not st.session_state.simulated_suggestions.empty:
+        original_map = st.session_state.simulated_suggestions.set_index("item_id")["Projetista"].to_dict()
+    running_posts = {name: int(base_posts.get(name, 0)) for name in DESIGNERS}
+    running_projects = {name: int(base_projects.get(name, 0)) for name in DESIGNERS}
+    for idx, row in result.iterrows():
+        designer = str(row.get("Projetista", ""))
+        posts = int(pd.to_numeric(pd.Series([row.get("PLN", 0)]), errors="coerce").fillna(0).iloc[0])
+        before_posts = running_posts.get(designer, 0)
+        before_projects = running_projects.get(designer, 0)
+        after_posts = before_posts + posts
+        after_projects = before_projects + 1
+        result.at[idx, "Carga antes (postes)"] = before_posts
+        result.at[idx, "Carga antes (projetos)"] = before_projects
+        result.at[idx, "Carga depois (postes)"] = after_posts
+        result.at[idx, "Carga depois (projetos)"] = after_projects
+        if original_map.get(str(row.get("item_id", ""))) != designer:
+            result.at[idx, "Motivo"] = "Ajuste manual do coordenador após a simulação automática"
+        running_posts[designer] = after_posts
+        running_projects[designer] = after_projects
+    return result
+
+
+def validate_manual_simulation(df: pd.DataFrame) -> list[str]:
+    errors: list[str] = []
+    if df.empty:
+        return errors
+    if df["item_id"].astype(str).duplicated().any():
+        errors.append("A mesma obra aparece mais de uma vez na simulação.")
+    if (df["Projetista"].astype(str).str.strip() == "").any():
+        errors.append("Existe atribuição sem projetista.")
+    invalid = sorted(set(df["Projetista"].astype(str)) - set(DESIGNERS))
+    if invalid:
+        errors.append("Projetistas fora da lista oficial: " + ", ".join(invalid))
+    # Recalculate portfolio caps after manual edits.
+    base_posts = baseline.set_index("Projetista")["PLN já atribuído"].to_dict()
+    base_projects = baseline.set_index("Projetista")["Projetos já atribuídos"].to_dict()
+    for designer, group in df.groupby("Projetista"):
+        total_posts = int(base_posts.get(designer, 0)) + int(pd.to_numeric(group["PLN"], errors="coerce").fillna(0).sum())
+        total_projects = int(base_projects.get(designer, 0)) + len(group)
+        if total_posts > MAX_PORTFOLIO_POSTS or total_projects > MAX_PORTFOLIO_PROJECTS:
+            errors.append(
+                f"{designer}: a edição ultrapassa o teto de {MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos."
+            )
+    return errors
+
+
+def run_simulation():
+    suggestions, summary = compute_distribution()
+    cycle_id = f"SIM-{NOW.strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
+    audit = AuditStore("data/automation_audit.sqlite3")
+    audit.start_cycle(cycle_id, NOW, source_mode, "simulation", len(projects), len(DESIGNERS))
+    for _, row in suggestions.iterrows():
+        audit.log_assignment(cycle_id, NOW, row.to_dict(), "suggest", "success")
+    audit.finish_cycle(cycle_id, NOW, "success", len(suggestions), 0, "Simulação gerada no Streamlit")
+    st.session_state.simulated_suggestions = suggestions
+    st.session_state.simulated_summary = summary
+    st.session_state.simulation_signature = current_simulation_signature()
+    st.session_state.simulation_cycle_id = cycle_id
+    reset_generated_output()
+
+
+def generate_distribution_file(suggestions: pd.DataFrame | None = None):
     try:
-        suggestions, distribution_summary = suggest_assignments(projects, live_snapshot, TARGETS, STATUS)
+        suggestions = suggestions.copy() if suggestions is not None else st.session_state.simulated_suggestions.copy()
         if suggestions.empty:
-            reset_generated_output()
-            st.session_state.generated_distribution_summary = distribution_summary
-            st.info("No momento, não há novas obras elegíveis que precisem ser distribuídas.")
+            st.info("A simulação não possui novas obras para distribuir.")
+            return
+        errors = validate_manual_simulation(suggestions)
+        if errors:
+            for error in errors:
+                st.error(error)
             return
         if source_mode != "Excel - validação":
             st.session_state.generated_distribution_suggestions = suggestions
-            st.session_state.generated_distribution_summary = distribution_summary
+            st.session_state.generated_distribution_summary = st.session_state.simulated_summary.copy()
             return
         generated_at = datetime.now(ZoneInfo(TIMEZONE))
         output_bytes = generate_distributed_excel_bytes(
             st.session_state.base_excel_bytes,
             suggestions,
-            distribution_summary=distribution_summary,
+            distribution_summary=st.session_state.simulated_summary,
             target_posts=TARGETS.target_posts,
             target_projects=TARGETS.target_projects,
             generated_at=generated_at,
@@ -610,7 +765,24 @@ def generate_distribution_file():
         st.session_state.generated_excel_bytes = output_bytes
         st.session_state.generated_excel_name = f"{stem}_DISTRIBUIDA_{generated_at.strftime('%Y%m%d_%H%M%S')}.xlsx"
         st.session_state.generated_distribution_suggestions = suggestions
-        st.session_state.generated_distribution_summary = distribution_summary
+        st.session_state.generated_distribution_summary = st.session_state.simulated_summary.copy()
+
+        cycle_id = f"EXP-{generated_at.strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
+        audit = AuditStore("data/automation_audit.sqlite3")
+        audit.start_cycle(cycle_id, generated_at, source_mode, "export", len(projects), len(DESIGNERS))
+        for _, row in suggestions.iterrows():
+            audit.log_assignment(cycle_id, generated_at, row.to_dict(), "export", "success")
+        audit.finish_cycle(cycle_id, generated_at, "success", len(suggestions), len(suggestions), "Planilha distribuída gerada")
+
+        if WEBHOOK_URL and st.session_state.notify_after_distribution:
+            try:
+                send_distribution_webhook(
+                    WEBHOOK_URL,
+                    "NIP Smart - nova distribuição",
+                    f"{len(suggestions)} obra(s) distribuídas em {generated_at.strftime('%d/%m/%Y %H:%M')}.",
+                )
+            except Exception as exc:
+                st.warning(f"A planilha foi gerada, mas a notificação não foi enviada: {exc}")
     except Exception as exc:
         st.error(f"Não foi possível gerar a distribuição: {exc}")
 
@@ -626,11 +798,10 @@ def render_download_result():
         left, right = st.columns([3, 1])
         with left:
             st.download_button(
-                "⬇️ Baixar BASE LIST distribuída",
+                "⬇️ BAIXAR BASE LIST DISTRIBUÍDA",
                 data=st.session_state.generated_excel_bytes,
                 file_name=st.session_state.generated_excel_name,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
                 use_container_width=True,
             )
         right.metric("Novas atribuições", len(suggestions))
@@ -638,172 +809,201 @@ def render_download_result():
         st.success(f"Prévia gerada com {len(suggestions)} nova(s) atribuição(ões).")
 
 
+# Invalidate stale simulation if files/settings changed.
+if st.session_state.simulation_signature and st.session_state.simulation_signature != current_simulation_signature():
+    reset_simulation()
+
+
 # -----------------------------------------------------------------------------
 # PAGE: HOME
 # -----------------------------------------------------------------------------
 if PAGE == "🏠 Início":
-    st.markdown('<div class="section-title">O fluxo é este</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">O fluxo é simples</div>', unsafe_allow_html=True)
     s1, s2, s3 = st.columns(3)
     with s1:
-        st.markdown('<div class="step-card"><span class="num">1</span><b>Carregar as bases</b><p>BASE LIST + PROJETISTAS. A ferramenta identifica o que cada pessoa já tem em carteira.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-card"><span class="num">1</span><b>Carregar</b><p>A ferramenta lê a carteira existente e valida os dados.</p></div>', unsafe_allow_html=True)
     with s2:
-        st.markdown('<div class="step-card"><span class="num">2</span><b>Distribuir automaticamente</b><p>As obras são direcionadas primeiro para quem tem menor cobertura da meta diária.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-card"><span class="num">2</span><b>Simular</b><p>Confira quem receberá cada obra antes de alterar qualquer planilha.</p></div>', unsafe_allow_html=True)
     with s3:
-        st.markdown('<div class="step-card"><span class="num">3</span><b>Baixar e usar</b><p>Você recebe uma nova BASE LIST com a coluna Projetistas preenchida nas obras distribuídas.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-card"><span class="num">3</span><b>Gerar e baixar</b><p>Somente após a conferência é criada uma nova BASE LIST distribuída.</p></div>', unsafe_allow_html=True)
 
     st.write("")
-    st.markdown('<div class="section-title">Resumo da equipe antes da distribuição</div>', unsafe_allow_html=True)
-    k1, k2, k3, k4, k5 = st.columns(5)
+    st.markdown('<div class="section-title">Situação atual da equipe</div>', unsafe_allow_html=True)
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("Projetistas", len(DESIGNERS))
     k2.metric("Sem obras", without_load)
     k3.metric("Carga parcial", partial_load)
     k4.metric("Carteira completa", covered_load)
-    k5.metric("Obras prontas p/ distribuir", len(eligible_available))
-
+    k5.metric("Obras prontas", len(eligible_available))
+    k6.metric("Equilíbrio", f'{balance["score"]:.0f}%')
     st.caption(
-        "**Carteira** = obras com Status **Em projeto** já atribuídas ao projetista. "
-        f"A referência diária é **{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos**."
+        f"Meta: **{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos** • "
+        f"Teto de segurança: **{MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos**."
     )
 
-    st.markdown('<div class="section-title">Passo 2 — Gerar a distribuição</div>', unsafe_allow_html=True)
-    blocked_count = quality["disponiveis_sem_pln"] + quality["disponiveis_sem_sgo"]
-    a1, a2, a3 = st.columns(3)
+    if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality.get("sgo_duplicado", 0):
+        st.warning("Há pendências de dados na BASE LIST. A ferramenta bloqueia automaticamente obras sem SGO/PLN da distribuição.")
+
+    st.markdown('<div class="section-title">Passo 2 — Simule antes de distribuir</div>', unsafe_allow_html=True)
+    a1, a2, a3, a4 = st.columns(4)
     a1.metric("Obras disponíveis", len(eligible_available))
     a2.metric("Postes disponíveis", available_posts)
-    a3.metric("Obras bloqueadas por dados", blocked_count)
+    a3.metric("Bloqueadas por dados", quality["disponiveis_sem_pln"] + quality["disponiveis_sem_sgo"])
+    a4.metric("Projetistas sem carga", without_load)
 
-    if source_mode == "Excel - validação":
-        if st.button("⚡ GERAR DISTRIBUIÇÃO AUTOMÁTICA", type="primary", use_container_width=True):
-            generate_distribution_file()
-        st.caption("A BASE original não é modificada. A ferramenta cria uma nova planilha para download.")
-        render_download_result()
+    if not CAN_EDIT:
+        st.info("Você está no perfil Consulta. Simulação e geração de planilha ficam disponíveis apenas para Administrador.")
     else:
-        st.info("A distribuição detalhada está disponível na página **Distribuir obras**.")
+        if st.button("🔎 SIMULAR DISTRIBUIÇÃO", use_container_width=True, disabled=len(eligible_available) == 0):
+            run_simulation()
+            st.rerun()
 
-    st.markdown('<div class="section-title">Conferir carga da equipe</div>', unsafe_allow_html=True)
+    if not st.session_state.simulated_suggestions.empty:
+        st.success(f"Simulação pronta: {len(st.session_state.simulated_suggestions)} nova(s) atribuição(ões). Confira na página **Distribuir obras**.")
+        b1, b2 = st.columns(2)
+        with b1:
+            if source_mode == "Excel - validação" and CAN_EDIT:
+                if st.button("✅ GERAR PLANILHA COM A SIMULAÇÃO", type="primary", use_container_width=True):
+                    generate_distribution_file()
+            else:
+                st.caption("A aplicação definitiva é feita na página Distribuir obras.")
+        with b2:
+            if st.button("➡️ CONFERIR DISTRIBUIÇÃO DETALHADA", use_container_width=True):
+                st.session_state.nav_page = "⚡ Distribuir obras"
+                st.rerun()
+        render_download_result()
+
+    st.markdown('<div class="section-title">Carteira por projetista</div>', unsafe_allow_html=True)
     load_view = compact_load_table(baseline, TARGETS.target_posts, TARGETS.target_projects)
-    st.dataframe(
-        load_view,
-        use_container_width=True,
-        hide_index=True,
-        column_config=compact_load_config(),
-        height=min(620, 78 + 35 * len(load_view)),
-    )
+    st.dataframe(load_view, use_container_width=True, hide_index=True, column_config=compact_load_config(), height=min(620, 78 + 35 * len(load_view)))
 
-    st.write("")
     left, right = st.columns([1.45, 1])
     with left:
         chart = baseline[["Projetista", "PLN já atribuído", "Projetos já atribuídos"]].copy().sort_values("PLN já atribuído")
-        fig = px.bar(
-            chart,
-            y="Projetista",
-            x="PLN já atribuído",
-            orientation="h",
-            hover_data=["Projetos já atribuídos"],
-            title="Carga atual em postes por projetista",
-        )
+        fig = px.bar(chart, y="Projetista", x="PLN já atribuído", orientation="h", hover_data=["Projetos já atribuídos"], title="Carga atual em postes por projetista")
         fig.add_vline(x=TARGETS.target_posts, line_dash="dash", annotation_text=f"Meta {TARGETS.target_posts}")
+        fig.add_vline(x=MAX_PORTFOLIO_POSTS, line_dash="dot", annotation_text=f"Teto {MAX_PORTFOLIO_POSTS}")
         st.plotly_chart(style_figure(fig, max(380, 27 * len(chart))), use_container_width=True)
     with right:
         st.markdown('<div class="section-title">Leitura rápida</div>', unsafe_allow_html=True)
         insights = management_insights(live_snapshot, baseline, designer_pred, len(eligible_available), available_posts)
-        render_insights(insights, max_items=4)
+        render_insights(insights, max_items=5)
 
 
 # -----------------------------------------------------------------------------
 # PAGE: DISTRIBUTION
 # -----------------------------------------------------------------------------
 elif PAGE == "⚡ Distribuir obras":
-    st.markdown('<div class="section-title">Antes de distribuir</div>', unsafe_allow_html=True)
-    st.caption("A ferramenta só considera obras prontas para uso e não retira obras que já estão atribuídas a alguém.")
-
+    st.markdown('<div class="section-title">1 — Fila disponível</div>', unsafe_allow_html=True)
+    st.caption("Obras já atribuídas nunca são redistribuídas automaticamente.")
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("Obras prontas", len(eligible_available))
     d2.metric("Postes disponíveis", available_posts)
-    d3.metric("Projetistas sem obras", without_load)
-    d4.metric("Novas atribuições sugeridas", len(live_suggestions))
+    d3.metric("Sem obras", without_load)
+    d4.metric("Equilíbrio atual", f'{balance["score"]:.0f}%')
 
-    st.markdown(
-        '<div class="rule-card"><b>Uma obra entra na distribuição quando:</b> Status = Em projeto, Projetistas está vazio, Nota SGO está preenchida e PLN é maior que zero.</div>',
-        unsafe_allow_html=True,
-    )
-    st.write("")
+    queue_cols = ["sgo", "posts", "priority", "deadline", "regional", "municipality"]
+    queue = eligible_available[queue_cols].copy().rename(columns={
+        "sgo": "Nota SGO", "posts": "PLN", "priority": "Prioridade", "deadline": "Prazo", "regional": "Regional", "municipality": "Município"
+    })
+    if not queue.empty:
+        st.dataframe(queue.head(100), use_container_width=True, hide_index=True)
 
-    if live_suggestions.empty:
-        st.info("Não há novas atribuições sugeridas com a situação atual da base.")
+    st.markdown('<div class="section-title">2 — Simulação</div>', unsafe_allow_html=True)
+    if CAN_EDIT and st.button("🔎 GERAR / ATUALIZAR SIMULAÇÃO", use_container_width=True, disabled=len(eligible_available) == 0):
+        run_simulation()
+        st.rerun()
+
+    sim = st.session_state.simulated_suggestions.copy()
+    if sim.empty:
+        st.info("Ainda não há simulação. Clique em **Gerar / atualizar simulação** para ver quem receberá cada obra.")
     else:
-        preview_cols = [c for c in ["Projetista", "Nota SGO", "PLN", "Regional", "Município"] if c in live_suggestions.columns]
-        preview = live_suggestions[preview_cols].copy() if preview_cols else live_suggestions.drop(columns=["etag"], errors="ignore")
-        st.markdown("#### Prévia — quem receberá cada obra")
-        st.dataframe(preview, use_container_width=True, hide_index=True)
-
-    if source_mode == "Excel - validação":
-        if st.button("⚡ Gerar nova BASE LIST distribuída", type="primary", use_container_width=True, disabled=live_suggestions.empty):
-            generate_distribution_file()
-        render_download_result()
-    elif source_mode == "DEMO" and not live_suggestions.empty:
-        if st.button("Simular distribuição nesta sessão", type="primary", use_container_width=True):
-            updated = projects.copy()
-            for _, row in live_suggestions.iterrows():
-                updated.loc[updated["item_id"].astype(str) == str(row["item_id"]), "assignee"] = row["Projetista"]
-            st.session_state.demo_projects = updated
-            st.success("Distribuição simulada.")
-            st.rerun()
-    elif source_mode == "Microsoft Lists" and not live_suggestions.empty:
-        if not WRITE_ENABLED:
-            st.warning("A gravação no Microsoft Lists está bloqueada. A prévia acima é somente leitura.")
-        else:
-            confirm = st.checkbox("Confirmo que quero gravar essas atribuições no Microsoft Lists")
-            if st.button("Aplicar no Microsoft Lists", type="primary", use_container_width=True, disabled=not confirm):
-                try:
-                    repo = make_repository()
-                    lookup_by_name = {
-                        normalize_person_name(r["name"]): r.get("sharepoint_lookup_id")
-                        for _, r in designers_df.iterrows()
-                    }
-                    for _, row in live_suggestions.iterrows():
-                        etag = None if pd.isna(row.get("etag")) else row.get("etag")
-                        lookup_id = lookup_by_name.get(normalize_person_name(row["Projetista"]))
-                        repo.assign_project(str(row["item_id"]), str(row["Projetista"]), etag, lookup_id)
-                    st.session_state.graph_projects = repo.fetch_projects()
-                    st.session_state.column_diagnostics = repo.column_diagnostics()
-                    st.session_state.last_sync = datetime.now(ZoneInfo(TIMEZONE))
-                    st.success(f"{len(live_suggestions)} projeto(s) atribuídos no Microsoft Lists.")
-                    st.rerun()
-                except GraphError as exc:
-                    st.error(str(exc))
-                except Exception as exc:
-                    st.error(f"Falha ao aplicar: {exc}")
-
-    if not live_distribution_summary.empty:
-        st.markdown("#### Como fica a carga depois da distribuição")
-        summary = live_distribution_summary.copy()
-        wanted = [
-            "Projetista", "Potencial postes após distribuição", "Potencial projetos após distribuição",
-            "Novos projetos sugeridos", "Novos postes sugeridos",
+        st.caption("Você pode retirar uma linha da distribuição ou trocar o projetista antes de gerar a planilha. O sistema valida o teto de carteira.")
+        editor = sim.copy()
+        editor.insert(0, "Incluir", True)
+        editable_cols = [
+            "Incluir", "Projetista", "Nota SGO", "PLN", "Prioridade", "Prazo", "Regional", "Município",
+            "Carga antes (postes)", "Carga depois (postes)", "Motivo", "item_id", "Nº da nota", "Carga antes (projetos)", "Carga depois (projetos)", "etag",
         ]
+        editable_cols = [c for c in editable_cols if c in editor.columns]
+        edited = st.data_editor(
+            editor[editable_cols],
+            use_container_width=True,
+            hide_index=True,
+            disabled=[c for c in editable_cols if c not in ["Incluir", "Projetista"]],
+            column_config={
+                "Incluir": st.column_config.CheckboxColumn("Incluir", default=True),
+                "Projetista": st.column_config.SelectboxColumn("Projetista", options=DESIGNERS, required=True, width="large"),
+                "Motivo": st.column_config.TextColumn("Por que recebeu?", width="large"),
+            },
+            key="distribution_editor_v12",
+        )
+        final_sim = edited[edited["Incluir"]].drop(columns=["Incluir"], errors="ignore").copy()
+        final_sim = recalculate_manual_simulation(final_sim)
+        errors = validate_manual_simulation(final_sim)
+        if errors:
+            for error in errors:
+                st.error(error)
+        else:
+            st.success(f"Simulação válida: {len(final_sim)} obra(s) pronta(s) para gerar.")
+            if CAN_EDIT and st.button("💾 SALVAR AJUSTES DA SIMULAÇÃO", use_container_width=True):
+                # Preserve any columns omitted by the editor by merging on item_id.
+                original = st.session_state.simulated_suggestions.copy().set_index("item_id")
+                edited_idx = final_sim.copy().set_index("item_id")
+                for col in edited_idx.columns:
+                    original.loc[edited_idx.index, col] = edited_idx[col]
+                st.session_state.simulated_suggestions = original.loc[edited_idx.index].reset_index()
+                st.success("Ajustes salvos.")
+
+            st.markdown('<div class="section-title">3 — Gerar resultado</div>', unsafe_allow_html=True)
+            if CAN_EDIT and source_mode == "Excel - validação":
+                if st.button("✅ GERAR NOVA BASE LIST DISTRIBUÍDA", type="primary", use_container_width=True):
+                    st.session_state.simulated_suggestions = final_sim.copy()
+                    generate_distribution_file(final_sim)
+                render_download_result()
+            elif source_mode == "Microsoft Lists" and CAN_EDIT:
+                if not WRITE_ENABLED:
+                    st.warning("A gravação no Microsoft Lists está bloqueada. A simulação é somente leitura.")
+                else:
+                    confirm = st.checkbox("Confirmo que quero gravar estas atribuições no Microsoft Lists")
+                    if st.button("✅ APLICAR NO MICROSOFT LISTS", type="primary", use_container_width=True, disabled=not confirm):
+                        try:
+                            repo = make_repository()
+                            lookup_by_name = {normalize_person_name(r["name"]): r.get("sharepoint_lookup_id") for _, r in designers_df.iterrows()}
+                            for _, row in final_sim.iterrows():
+                                etag = None if pd.isna(row.get("etag")) else row.get("etag")
+                                lookup_id = lookup_by_name.get(normalize_person_name(row["Projetista"]))
+                                repo.assign_project(str(row["item_id"]), str(row["Projetista"]), etag, lookup_id)
+                            sync_lists_now()
+                            st.success(f"{len(final_sim)} projeto(s) atribuídos no Microsoft Lists.")
+                            reset_simulation()
+                            st.rerun()
+                        except GraphError as exc:
+                            st.error(str(exc))
+                        except Exception as exc:
+                            st.error(f"Falha ao aplicar: {exc}")
+
+    if not st.session_state.simulated_summary.empty:
+        st.markdown("#### Como fica a carga após a simulação")
+        summary = st.session_state.simulated_summary.copy()
+        wanted = ["Projetista", "Potencial postes após distribuição", "Potencial projetos após distribuição", "Novos projetos sugeridos", "Novos postes sugeridos", "Motivo"]
         wanted = [c for c in wanted if c in summary.columns]
         st.dataframe(summary[wanted], use_container_width=True, hide_index=True)
-        if "Potencial postes após distribuição" in summary.columns:
-            plot = summary.sort_values("Potencial postes após distribuição")
-            fig = px.bar(
-                plot,
-                y="Projetista",
-                x="Potencial postes após distribuição",
-                orientation="h",
-                title="Carga em postes após a distribuição sugerida",
-            )
-            fig.add_vline(x=TARGETS.target_posts, line_dash="dash", annotation_text=f"Meta {TARGETS.target_posts}")
-            st.plotly_chart(style_figure(fig, max(400, 26 * len(plot))), use_container_width=True)
+        plot = summary.sort_values("Potencial postes após distribuição")
+        fig = px.bar(plot, y="Projetista", x="Potencial postes após distribuição", orientation="h", title="Carga em postes depois da simulação")
+        fig.add_vline(x=TARGETS.target_posts, line_dash="dash", annotation_text=f"Meta {TARGETS.target_posts}")
+        fig.add_vline(x=MAX_PORTFOLIO_POSTS, line_dash="dot", annotation_text=f"Teto {MAX_PORTFOLIO_POSTS}")
+        st.plotly_chart(style_figure(fig, max(400, 26 * len(plot))), use_container_width=True)
 
     with st.expander("Como a ferramenta decide quem recebe primeiro?"):
         st.markdown(
             f"""
-            - Primeiro olha quanto cada projetista já tem em carteira.
             - Prioriza quem está com **menor cobertura** da meta de **{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos**.
-            - Distribui em rodadas para evitar concentrar várias obras em uma única pessoa.
-            - Obra já atribuída não é redistribuída automaticamente.
-            - Obra sem Nota SGO ou sem PLN válido fica fora da distribuição até o dado ser corrigido.
+            - Distribui em rodadas para evitar concentração.
+            - Se habilitado, usa **Prioridade e Prazo** para ordenar a fila.
+            - Nunca move automaticamente uma obra já atribuída.
+            - Bloqueia obra sem Nota SGO ou PLN válido.
+            - Não ultrapassa o teto de **{MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos**.
             - Excedente de um dia não reduz a meta do dia seguinte.
             """
         )
@@ -816,65 +1016,43 @@ elif PAGE == "👷 Produtividade":
     selected_label = ANALYSIS_NOW.strftime("%d/%m/%Y")
     is_current_day = analysis_date == NOW.date()
     st.markdown(f'<div class="section-title">Produtividade em {selected_label}</div>', unsafe_allow_html=True)
-    st.caption(
-        "**Produção do dia** = projetos com Data de entrega do projeto na data selecionada. "
-        "Postes = Qtd. de poste final; quando estiver vazia, o sistema usa o PLN como apoio."
-    )
+    st.caption("Produção = projetos com Data de entrega do projeto na data analisada. Postes usa Qtd. de poste final; PLN é fallback.")
 
     total_posts_day = int(pd.to_numeric(analysis_snapshot["Postes realizados"], errors="coerce").fillna(0).sum())
     total_projects_day = int(pd.to_numeric(analysis_snapshot["Projetos realizados"], errors="coerce").fillna(0).sum())
     full_meta = int((analysis_snapshot["Situação"] == "Meta atingida").sum())
     attention_count = len(designer_attention)
-
     p1, p2, p3, p4 = st.columns(4)
     p1.metric("Postes entregues", total_posts_day)
     p2.metric("Projetos entregues", total_projects_day)
     p3.metric("Meta cheia atingida", full_meta)
     p4.metric("Precisam de atenção", attention_count)
-
     if is_current_day:
-        st.caption(
-            f"Jornada agora: **{current_work_status(NOW, TIMEZONE)}** • "
-            f"Tempo útil restante: **{format_minutes(productive_minutes_remaining(NOW, TIMEZONE))}**"
-        )
+        st.caption(f"Jornada: **{current_work_status(NOW, TIMEZONE)}** • Tempo útil restante: **{format_minutes(productive_minutes_remaining(NOW, TIMEZONE))}**")
 
-    today_tab, period_tab, predict_tab = st.tabs(["📍 Dia selecionado", "📅 Semana e mês", "📈 Projeção"])
+    day_tab, individual_tab, period_tab, predict_tab, close_tab = st.tabs([
+        "📍 Dia", "👤 Histórico individual", "📅 Semana e mês", "📈 Projeção", "✅ Fechamento diário"
+    ])
 
-    with today_tab:
+    with day_tab:
         st.markdown("#### Quem precisa de atenção")
         if designer_attention.empty:
             st.success("Nenhum projetista está sinalizado para atenção nesta data.")
         else:
-            if is_current_day and productive_minutes_remaining(NOW, TIMEZONE) > 0:
-                st.caption("Durante o expediente, entram aqui quem está abaixo do ritmo, sem carga suficiente ou com risco de não fechar a meta.")
-            else:
-                st.caption("Após o fim do dia, entram aqui os projetistas que fecharam abaixo da meta ou tiveram pendência de carga/dados.")
             attention_view = designer_attention.copy()
             attention_config = compact_daily_config(is_current_day)
             if not is_current_day:
                 attention_view = attention_view.drop(columns=["Carteira atual"], errors="ignore")
                 attention_config.pop("Carteira atual", None)
-            st.dataframe(
-                attention_view,
-                use_container_width=True,
-                hide_index=True,
-                column_config=attention_config,
-                height=min(520, 78 + 35 * len(attention_view)),
-            )
+            st.dataframe(attention_view, use_container_width=True, hide_index=True, column_config=attention_config, height=min(520, 78 + 35 * len(attention_view)))
 
         st.markdown("#### Resultado de toda a equipe")
-        daily_view = compact_daily_table(analysis_snapshot, TARGETS.target_posts, TARGETS.target_projects, is_current_day)
+        daily_view = compact_daily_table(analysis_snapshot, TARGETS.target_posts, TARGETS.target_projects)
         daily_config = compact_daily_config(is_current_day)
         if not is_current_day:
             daily_view = daily_view.drop(columns=["Carteira atual"], errors="ignore")
             daily_config.pop("Carteira atual", None)
-        st.dataframe(
-            daily_view,
-            use_container_width=True,
-            hide_index=True,
-            column_config=daily_config,
-            height=min(650, 78 + 35 * len(daily_view)),
-        )
+        st.dataframe(daily_view, use_container_width=True, hide_index=True, column_config=daily_config, height=min(650, 78 + 35 * len(daily_view)))
 
         plot = analysis_snapshot[["Projetista", "Postes realizados"]].copy().sort_values("Postes realizados")
         fig = px.bar(plot, y="Projetista", x="Postes realizados", orientation="h", title="Postes entregues por projetista")
@@ -882,59 +1060,80 @@ elif PAGE == "👷 Produtividade":
         fig.add_vline(x=TARGETS.min_posts, line_dash="dot", annotation_text=f"Mínimo {TARGETS.min_posts}")
         st.plotly_chart(style_figure(fig, max(390, 27 * len(plot))), use_container_width=True)
 
-        with st.expander("Ver indicadores detalhados do dia"):
-            detail_cols = [
-                "Projetista", "Postes realizados", "Projetos realizados", "Postes em carteira", "Projetos em carteira",
-                "Meta postes agora", "Meta projetos agora", "Aderência postes %", "Aderência projetos %",
-                "Previsão postes 18h", "Previsão projetos 18h", "Status ritmo", "Situação",
-            ]
-            st.dataframe(analysis_snapshot[detail_cols], use_container_width=True, hide_index=True)
+    with individual_tab:
+        selected_designer = st.selectbox("Projetista", DESIGNERS, key="designer_history_v12")
+        history = designer_daily_history(projects, selected_designer, analysis_date, TARGETS, TIMEZONE, days=20)
+        h1, h2, h3 = st.columns(3)
+        h1.metric("Postes nos últimos 20 dias úteis", int(history["Postes"].sum()))
+        h2.metric("Projetos nos últimos 20 dias úteis", int(history["Projetos"].sum()))
+        consistency = float((history["Situação"] == "Meta cheia").mean() * 100) if not history.empty else 0
+        h3.metric("Consistência da meta cheia", f"{consistency:.0f}%")
+        fig = px.line(history, x="Data", y="Postes", markers=True, title=f"Histórico de postes — {selected_designer}")
+        fig.add_hline(y=TARGETS.target_posts, line_dash="dash", annotation_text=f"Meta {TARGETS.target_posts}")
+        fig.add_hline(y=TARGETS.min_posts, line_dash="dot", annotation_text=f"Mínimo {TARGETS.min_posts}")
+        st.plotly_chart(style_figure(fig, 390), use_container_width=True)
+        st.dataframe(history, use_container_width=True, hide_index=True)
+
+        month_start = analysis_date.replace(day=1)
+        quality_proxy = designer_quality_proxy(projects, [selected_designer], month_start, analysis_date, TIMEZONE)
+        if not quality_proxy.empty and int(quality_proxy.iloc[0]["Projetos entregues"]) > 0:
+            st.markdown("#### Sinal de qualidade disponível na base")
+            st.caption("'Reanálise registrada' é um indicador de processo, não uma classificação de erro do projetista.")
+            st.dataframe(quality_proxy, use_container_width=True, hide_index=True)
 
     with period_tab:
         left, right = st.columns(2)
         with left:
             st.markdown("#### Semana")
-            week_simple_cols = [c for c in ["Projetista", "Postes", "Projetos", "Dias meta cheia", "Consistência meta cheia %"] if c in week.columns]
-            st.dataframe(week[week_simple_cols], use_container_width=True, hide_index=True)
+            cols = [c for c in ["Projetista", "Postes", "Projetos", "Dias meta cheia", "Consistência meta cheia %"] if c in week.columns]
+            st.dataframe(week[cols], use_container_width=True, hide_index=True)
             if not week.empty:
                 fig = px.bar(week, x="Projetista", y="Postes", title="Postes entregues na semana")
                 st.plotly_chart(style_figure(fig, 380), use_container_width=True)
         with right:
             st.markdown("#### Mês")
-            month_simple_cols = [c for c in ["Projetista", "Postes", "Projetos", "Dias meta cheia", "Consistência meta cheia %"] if c in month.columns]
-            st.dataframe(month[month_simple_cols], use_container_width=True, hide_index=True)
+            cols = [c for c in ["Projetista", "Postes", "Projetos", "Dias meta cheia", "Consistência meta cheia %"] if c in month.columns]
+            st.dataframe(month[cols], use_container_width=True, hide_index=True)
             if not month.empty:
                 fig = px.bar(month, x="Projetista", y="Postes", title="Postes entregues no mês")
                 st.plotly_chart(style_figure(fig, 380), use_container_width=True)
-        st.info("A referência semanal e mensal serve para acompanhamento. O excedente de um dia não vira crédito para o dia seguinte.")
+        st.info("A referência semanal e mensal é apenas acompanhamento. A meta operacional é diária e não cumulativa.")
 
     with predict_tab:
         st.markdown("#### Tendência de fechamento do mês")
-        st.caption("A projeção usa a produção acumulada e o ritmo médio dos últimos 5 dias úteis.")
+        st.caption("A projeção usa produção acumulada e ritmo médio dos últimos 5 dias úteis.")
         if designer_pred.empty:
             st.info("Ainda não há dados suficientes para projeção.")
         else:
-            simple_cols = [
-                c for c in [
-                    "Projetista", "Postes mês", "Projetos mês", "Projeção postes mês", "Projeção projetos mês",
-                    "Consistência meta cheia %", "Tendência",
-                ] if c in designer_pred.columns
-            ]
+            simple_cols = [c for c in ["Projetista", "Postes mês", "Projetos mês", "Projeção postes mês", "Projeção projetos mês", "Consistência meta cheia %", "Tendência"] if c in designer_pred.columns]
             st.dataframe(designer_pred[simple_cols], use_container_width=True, hide_index=True)
-
             trend_counts = designer_pred["Tendência"].value_counts().rename_axis("Tendência").reset_index(name="Projetistas")
             fig = px.pie(trend_counts, names="Tendência", values="Projetistas", hole=.58, title="Situação projetada do mês")
             st.plotly_chart(style_figure(fig, 390), use_container_width=True)
-
             need = designer_pred[designer_pred["Tendência"] == "Requer acompanhamento"]
             st.markdown("#### Projetistas que merecem acompanhamento")
             if need.empty:
-                st.success("Nenhum projetista está projetado abaixo da faixa de acompanhamento neste momento.")
+                st.success("Nenhum projetista está projetado abaixo da faixa de acompanhamento.")
             else:
                 st.dataframe(need[simple_cols], use_container_width=True, hide_index=True)
 
-            with st.expander("Ver análise preditiva completa"):
-                st.dataframe(designer_pred, use_container_width=True, hide_index=True)
+    with close_tab:
+        close = daily_close_summary(analysis_snapshot, TARGETS)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Meta cheia", close["full"])
+        c2.metric("Faixa mínima", close["minimum"])
+        c3.metric("Abaixo da meta", close["below"])
+        c4.metric("Problemas de carga/dados", close["lack_load"] + close["data_issue"])
+        close_table = compact_daily_table(analysis_snapshot, TARGETS.target_posts, TARGETS.target_projects)
+        st.dataframe(close_table, use_container_width=True, hide_index=True, column_config=compact_daily_config(is_current_day))
+        close_bytes = generate_daily_close_excel(analysis_snapshot, analysis_date, TARGETS.target_posts, TARGETS.target_projects)
+        st.download_button(
+            "⬇️ BAIXAR FECHAMENTO DIÁRIO",
+            data=close_bytes,
+            file_name=f"FECHAMENTO_PROJETISTAS_{analysis_date.strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -942,20 +1141,18 @@ elif PAGE == "👷 Produtividade":
 # -----------------------------------------------------------------------------
 elif PAGE == "🔎 Dados e regras":
     st.markdown('<div class="section-title">Qualidade da BASE LIST</div>', unsafe_allow_html=True)
-    q1, q2, q3, q4, q5 = st.columns(5)
-    q1.metric("Obras Em projeto", quality["em_projeto"])
+    q1, q2, q3, q4, q5, q6 = st.columns(6)
+    q1.metric("Em projeto", quality["em_projeto"])
     q2.metric("Disponíveis", quality["disponiveis"])
     q3.metric("Já atribuídas", quality["atribuidos"])
-    q4.metric("Disponíveis sem PLN", quality["disponiveis_sem_pln"])
-    q5.metric("Disponíveis sem SGO", quality["disponiveis_sem_sgo"])
+    q4.metric("Sem PLN", quality["disponiveis_sem_pln"])
+    q5.metric("Sem SGO", quality["disponiveis_sem_sgo"])
+    q6.metric("SGO duplicado", quality.get("sgo_duplicado", 0))
 
-    if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality["atribuidos_sem_pln"]:
-        st.warning(
-            "Algumas obras precisam de correção de dados antes de serem tratadas com segurança. "
-            "Use as seções abaixo para localizar essas pendências."
-        )
+    if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality.get("sgo_duplicado", 0) or quality.get("nota_duplicada", 0):
+        st.warning("Existem inconsistências que merecem revisão. Obras sem PLN/SGO ficam bloqueadas para distribuição automática.")
 
-    with st.expander("Obras bloqueadas para distribuição"):
+    with st.expander("Obras bloqueadas para distribuição", expanded=True):
         blocked = prepared[
             prepared["status_norm"].isin(STATUS.project_pool_set)
             & (prepared["assignee_norm"] == "")
@@ -972,63 +1169,72 @@ elif PAGE == "🔎 Dados e regras":
         with st.expander("Projetistas atribuídos que não estão na planilha PROJETISTAS"):
             st.write(unlisted_names)
 
+    with st.expander("Indicador de equilíbrio da carteira", expanded=True):
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("Equilíbrio", f'{balance["score"]:.0f}%')
+        b2.metric("Cobertura média", f'{balance["avg_coverage"]:.0f}%')
+        b3.metric("Carga média", f'{balance["avg_posts"]:.1f} postes')
+        b4.metric("Diferença maior-menor", f'{balance["spread_posts"]:.0f} postes')
+        st.caption("Equilíbrio mede a dispersão entre as carteiras. Cobertura média mostra o quanto da meta está efetivamente abastecido.")
+
+    with st.expander("Regras e parâmetros", expanded=True):
+        st.markdown(
+            f"""
+            **Meta diária**: {TARGETS.target_posts} postes / {TARGETS.target_projects} projetos.  
+            **Faixa mínima**: {TARGETS.min_posts} postes / {TARGETS.min_projects} projetos.  
+            **Teto de carteira**: {MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos.  
+            **Meta não cumulativa**: excedente de um dia não reduz a meta do dia seguinte.  
+            **Carteira**: Status = Em projeto + Projetistas preenchido; peso = PLN.  
+            **Elegível para distribuição**: Em projeto + Projetistas vazio + Nota SGO + PLN válido.  
+            **Produção**: Data de entrega do projeto; Qtd. de poste final, com PLN como fallback.  
+            **Jornada**: 08:00–12:00 e 13:12–18:00 ({TOTAL_WORK_MINUTES} minutos produtivos).
+            """
+        )
+
+    with st.expander("Auditoria de distribuição"):
+        audit = AuditStore("data/automation_audit.sqlite3")
+        recent = audit.recent_cycles(30)
+        assignments = audit.recent_assignments(100)
+        if recent.empty:
+            st.info("Ainda não há ciclos registrados nesta sessão/ambiente.")
+        else:
+            st.markdown("**Ciclos recentes**")
+            st.dataframe(recent, use_container_width=True, hide_index=True)
+        if not assignments.empty:
+            st.markdown("**Decisões registradas**")
+            st.dataframe(assignments, use_container_width=True, hide_index=True)
+
     with st.expander("Consultar a BASE LIST carregada"):
         show = prepared.copy()
         show["Disponibilidade"] = ""
         pool_mask = show["status_norm"].isin(STATUS.project_pool_set)
         show.loc[pool_mask & (show["assignee_norm"] == ""), "Disponibilidade"] = "Disponível"
         show.loc[pool_mask & (show["assignee_norm"] != ""), "Disponibilidade"] = "Atribuído"
-        display = show[[
-            "note", "sgo", "status", "posts", "assignee", "regional", "municipality", "deadline", "Disponibilidade",
-        ]].rename(columns={
+        display = show[["note", "sgo", "status", "posts", "assignee", "regional", "municipality", "deadline", "Disponibilidade"]].rename(columns={
             "note": "Nº da nota", "sgo": "Nota SGO", "status": "Status", "posts": "PLN",
             "assignee": "Projetista", "regional": "Regional", "municipality": "Município", "deadline": "Prazo",
         })
         st.dataframe(display, use_container_width=True, hide_index=True)
 
-    with st.expander("Regras da ferramenta", expanded=True):
-        st.markdown(
-            f"""
-            **Meta diária do projetista**
-            - Referência: **{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos**.
-            - Faixa mínima: **{TARGETS.min_posts} postes / {TARGETS.min_projects} projetos**.
-            - A meta é **diária e não cumulativa**.
-
-            **O que conta como carteira**
-            - Obra com Status **Em projeto** e campo **Projetistas preenchido**.
-            - O peso da obra é o **PLN da coluna R**.
-
-            **O que pode ser distribuído**
-            - Status **Em projeto**.
-            - Projetistas vazio.
-            - Nota SGO preenchida.
-            - PLN maior que zero.
-
-            **O que conta como produção**
-            - Projeto com **Data de entrega do projeto** na data analisada.
-            - Postes: **Qtd. de poste**; se estiver vazia, PLN é usado como apoio.
-
-            **Jornada**
-            - 08:00–12:00 e 13:12–18:00.
-            - Tempo produtivo total: **{TOTAL_WORK_MINUTES} minutos**.
-            """
-        )
-
-    with st.expander("Microsoft Lists — configuração avançada"):
-        if source_mode != "Microsoft Lists":
-            st.caption("Altere a Fonte de dados para Microsoft Lists em Opções avançadas, na barra lateral, quando for iniciar a integração real.")
+    with st.expander("Microsoft Lists e notificações"):
+        st.write("Integração Microsoft Lists:", "**Configurada**" if GRAPH_READY else "**Aguardando Secrets**")
         st.write("Escrita no Microsoft Lists:", "**Liberada**" if WRITE_ENABLED else "**Bloqueada**")
+        st.write("Webhook de notificação:", "**Configurado**" if WEBHOOK_URL else "**Não configurado**")
         if source_mode == "Microsoft Lists" and not st.session_state.column_diagnostics.empty:
             st.dataframe(st.session_state.column_diagnostics, use_container_width=True, hide_index=True)
-        with st.expander("Ver mapeamento técnico de colunas"):
-            st.json(FIELD_MAP.__dict__)
+        st.caption("A atualização automática de 5 minutos pode ser ativada na barra lateral quando a fonte for Microsoft Lists.")
 
     with st.expander("Automação avançada por ciclos"):
-        st.caption("Área técnica para executar o motor de automação sem alterar o fluxo simples de uso diário.")
-        policy = AutomationPolicy(timezone=TIMEZONE, require_work_hours=True)
+        policy = AutomationPolicy(
+            timezone=TIMEZONE,
+            require_work_hours=True,
+            max_portfolio_posts=MAX_PORTFOLIO_POSTS,
+            max_portfolio_projects=MAX_PORTFOLIO_PROJECTS,
+            priority_enabled=PRIORITY_ENABLED,
+        )
         audit = AuditStore("data/automation_audit.sqlite3")
         engine = AutomationEngine(TARGETS, STATUS, policy=policy, audit=audit)
-        if st.button("Executar ciclo de simulação agora", use_container_width=True):
+        if CAN_EDIT and st.button("Executar ciclo de simulação agora", use_container_width=True):
             st.session_state["last_auto_result"] = engine.run_cycle(projects, DESIGNERS, NOW, source=source_mode, mode="dry-run")
         result = st.session_state.get("last_auto_result")
         if result is not None:
@@ -1040,7 +1246,3 @@ elif PAGE == "🔎 Dados e regras":
                 st.warning(result.message)
             if not result.suggestions.empty:
                 st.dataframe(result.suggestions.drop(columns=["etag"], errors="ignore"), use_container_width=True, hide_index=True)
-        recent = audit.recent_cycles(10)
-        if not recent.empty:
-            st.markdown("**Últimos ciclos**")
-            st.dataframe(recent, use_container_width=True, hide_index=True)

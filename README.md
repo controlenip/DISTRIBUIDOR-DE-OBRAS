@@ -1,114 +1,63 @@
-# NIP Smart Distribuição — V11
+# NIP Smart Distribuição — V12
 
-Aplicação **Python + Streamlit** para dois objetivos principais:
+Aplicação em **Python + Streamlit** para distribuição equilibrada de obras entre projetistas e acompanhamento de produtividade diária, semanal e mensal.
 
-1. **distribuir obras de forma equilibrada entre os projetistas**;
-2. **acompanhar a produtividade diária, semanal e mensal dos projetistas**.
+## O que mudou na V12
 
-A V11 mantém a interface simplificada e acrescenta um **reset completo da sessão** para evitar dados residuais entre análises.
+A V12 transforma o fluxo em uma operação mais segura e visual:
 
-## Fluxo de uso
+- **Simulação obrigatória antes de gerar a planilha**;
+- possibilidade de **incluir/excluir uma obra** e ajustar o projetista na simulação;
+- **teto de carteira configurável** para evitar sobrecarga;
+- fila com **Prioridade e Prazo**;
+- obras já atribuídas nunca são redistribuídas automaticamente;
+- motivo da atribuição e carga **antes/depois** registrados;
+- indicador de **equilíbrio da carteira**;
+- validação de SGO/PLN e detecção de SGO/nota duplicados;
+- **auditoria** dos ciclos de simulação e exportação;
+- perfil **Administrador / Consulta**, com PIN opcional via Secrets;
+- metas e limites configuráveis na interface;
+- histórico individual dos últimos 20 dias úteis;
+- consistência diária de meta;
+- projeção mensal;
+- fechamento diário para download em Excel;
+- sinal opcional de **reanálise registrada** quando a coluna existir na BASE;
+- Microsoft Lists com leitura, escrita protegida e opção de sincronização periódica;
+- notificação opcional via webhook/Power Automate;
+- botões com maior contraste: ações principais em laranja/azul, download em verde e **Limpar dados em vermelho**.
 
-No modo Excel, o usuário segue apenas três passos:
+## Regra principal
 
-1. carregar `BASE LIST.xlsx`;
-2. carregar `PROJETISTAS.xlsx`;
-3. clicar em **GERAR DISTRIBUIÇÃO AUTOMÁTICA** e baixar a nova BASE LIST.
+Meta padrão por projetista:
 
-Quando for iniciar uma nova análise, use **🧹 Limpar dados** no menu lateral. O botão remove os dois uploads, resultados, planilha gerada, diagnósticos e dados temporários da sessão.
+- 30 postes/dia;
+- 5 projetos/dia;
+- faixa mínima de 25 postes / 4 projetos;
+- meta diária e **não cumulativa**.
 
-A planilha original não é alterada.
-
-## Menu simplificado
-
-A interface possui somente quatro áreas principais:
-
-- **Início** — upload, resumo da equipe, botão de distribuição e download;
-- **Distribuir obras** — prévia das novas atribuições e carga após a distribuição;
-- **Produtividade** — resultado diário, semana/mês e análise preditiva;
-- **Dados e regras** — qualidade da base, regras técnicas e integração Microsoft Lists.
-
-Recursos técnicos ficam recolhidos para não poluir a operação diária.
-
-## Metas
-
-- referência diária: **30 postes / 5 projetos**;
-- faixa mínima: **25 postes / 4 projetos**;
-- jornada: **08:00–12:00 e 13:12–18:00**;
-- total produtivo: **528 minutos**;
-- meta diária **não cumulativa**.
-
-O excedente de um dia não diminui a meta do dia seguinte.
-
-## Conceitos exibidos na ferramenta
-
-### Carteira
-
-São as obras com:
+A carteira ativa considera obras com:
 
 - `Status do projeto = Em projeto`;
-- campo `Projetistas` preenchido.
+- campo `Projetistas` preenchido;
+- peso da obra = `PLN`.
 
-O peso da obra é o **PLN da coluna R**.
-
-### Produção
-
-É o que o projetista efetivamente entregou na data analisada.
-
-- data: `Data de entrega do projeto`;
-- postes: `Qtd. de poste`;
-- quando a quantidade final estiver vazia, o PLN pode ser usado como apoio.
-
-### Obras prontas para distribuir
-
-Uma obra só entra na distribuição automática quando:
+Uma obra pode entrar na distribuição automática quando:
 
 - Status = `Em projeto`;
 - Projetistas está vazio;
 - Nota SGO está preenchida;
 - PLN é maior que zero.
 
-## Colunas principais da BASE LIST
+## Fluxo recomendado
 
-| Coluna | Campo | Uso |
-|---|---|---|
-| A | Nº da nota | solicitação do cliente |
-| C | Nota SGO | número usado pelo projetista para iniciar o projeto |
-| E | Status do projeto | identifica as obras `Em projeto` |
-| R | P L N | quantidade de postes usada como peso da obra |
-| U | Projetistas | projetista responsável |
-| V | Data de entrega do projeto | data usada na produtividade diária |
-| W | Qtd. de poste | quantidade final entregue |
+1. Carregue `BASE_LIST.xlsx` e `PROJETISTAS.xlsx`.
+2. Clique em **SIMULAR DISTRIBUIÇÃO**.
+3. Confira/ajuste a simulação.
+4. Clique em **GERAR NOVA BASE LIST DISTRIBUÍDA**.
+5. Baixe o arquivo gerado.
+6. Use **LIMPAR DADOS** antes de começar um novo ciclo com outras bases.
 
-As colunas de levantamento não fazem parte dos indicadores da ferramenta.
-
-## Como a distribuição funciona
-
-O sistema:
-
-1. identifica o que cada projetista já tem em carteira;
-2. calcula quanto falta para 30 postes e 5 projetos;
-3. prioriza quem tem menor cobertura;
-4. distribui uma obra por rodada para evitar concentração;
-5. para de abastecer o projetista quando a carteira cobre a referência diária;
-6. mantém obras já atribuídas com o responsável atual.
-
-## Produtividade
-
-A página de produtividade permite escolher a data da análise e mostra:
-
-- postes entregues;
-- projetos entregues;
-- projetistas que atingiram a meta cheia;
-- quem precisa de atenção;
-- resultado da semana;
-- resultado do mês;
-- consistência da meta diária;
-- projeção de fechamento do mês.
-
-Para uma data anterior, a tela não apresenta a carteira atual como se fosse histórica.
-
-## Arquivo principal do Streamlit
+## Arquivo principal no Streamlit
 
 Use:
 
@@ -116,27 +65,25 @@ Use:
 app.py
 ```
 
-Todo o repositório deve permanecer no GitHub. Os usuários finais acessam apenas o link do Streamlit.
+Todo o conteúdo deste repositório deve permanecer no GitHub. O usuário final recebe apenas o link do Streamlit.
 
-## Execução local
+## Segurança
+
+Nunca coloque credenciais reais no GitHub. Use **Streamlit Secrets**.
+
+O arquivo `.streamlit/secrets.toml.example` mostra os campos aceitos, incluindo:
+
+- credenciais do Microsoft Graph;
+- PIN opcional de administrador;
+- parâmetros padrão;
+- webhook opcional para notificações.
+
+## Testes
+
+Execute:
 
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
+pytest -q
 ```
 
-## Microsoft Lists
-
-A integração via Microsoft Graph continua preparada, mas fica em **Opções avançadas / Dados e regras** para não confundir o uso diário.
-
-Nunca envie credenciais, `secrets.toml`, `BASE_LIST.xlsx` ou `PROJETISTAS.xlsx` para um repositório público.
-
-## Validação da V11
-
-- 21 testes automatizados aprovados;
-- botão **🧹 Limpar dados** validado com reset dos estados de trabalho e recriação dos campos de upload;
-- leitura validada com a BASE LIST e PROJETISTAS fornecidos;
-- 21 projetistas reconhecidos;
-- 12 projetistas sem obra na carteira atual;
-- 9 novas atribuições sugeridas na base de validação;
-- 9 projetistas diferentes contemplados nessas sugestões.
+A V12 inclui testes para distribuição, teto de carteira, prioridade, histórico individual, Excel e regras de jornada.

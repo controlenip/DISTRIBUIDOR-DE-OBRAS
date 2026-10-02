@@ -22,6 +22,9 @@ class AutomationPolicy:
     require_work_hours: bool = True
     require_sgo: bool = True
     require_pln: bool = True
+    max_portfolio_posts: int | None = 36
+    max_portfolio_projects: int | None = 6
+    priority_enabled: bool = True
 
 
 @dataclass
@@ -116,6 +119,10 @@ class AutomationEngine:
             self.targets,
             self.statuses,
             max_new_projects_per_designer=self.policy.max_new_projects_per_designer,
+            max_portfolio_posts=self.policy.max_portfolio_posts,
+            max_portfolio_projects=self.policy.max_portfolio_projects,
+            priority_enabled=self.policy.priority_enabled,
+            respect_time=True,
         )
 
         # Last defensive check: no duplicate item can appear in one cycle.

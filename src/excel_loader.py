@@ -18,6 +18,7 @@ BASE_ALIASES = {
     "completed_at": ["Data de entrega do projeto"],
     "actual_posts": ["Qtd. de poste", "Qtd de poste"],
     "priority": ["Prioridade"],
+    "reanalyzed_at": ["Data da reanálise", "Data da reanalise"],
 }
 
 DESIGNER_ALIASES = {
@@ -54,7 +55,7 @@ def load_base_excel(source) -> pd.DataFrame:
     """
     raw = _read_excel(source)
     optional = {
-        "actual_posts", "priority", "deadline", "completed_at",
+        "actual_posts", "priority", "deadline", "completed_at", "reanalyzed_at",
     }
     cols = {
         key: _find_column(raw, aliases, required=key not in optional)
@@ -66,7 +67,7 @@ def load_base_excel(source) -> pd.DataFrame:
     out["source_row"] = raw.index + 2
     ordered = [
         "note", "sgo", "status", "regional", "municipality", "deadline", "posts",
-        "assignee", "completed_at", "actual_posts", "priority",
+        "assignee", "completed_at", "actual_posts", "priority", "reanalyzed_at",
     ]
     for key in ordered:
         col = cols.get(key)

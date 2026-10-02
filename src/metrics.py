@@ -31,7 +31,7 @@ def prepare_projects(projects: pd.DataFrame, timezone: str) -> pd.DataFrame:
     expected = [
         "item_id", "note", "sgo", "municipality", "regional", "posts", "posts_valid",
         "assignee", "status", "priority", "deadline", "complexity", "assigned_at",
-        "completed_at", "actual_posts", "modified_at", "etag", "assignee_lookup_id"
+        "completed_at", "actual_posts", "reanalyzed_at", "modified_at", "etag", "assignee_lookup_id"
     ]
     for col in expected:
         if col not in df.columns:
@@ -59,6 +59,7 @@ def prepare_projects(projects: pd.DataFrame, timezone: str) -> pd.DataFrame:
     df["status_norm"] = df["status"].map(normalize_text)
     df["sgo_present"] = df["sgo"].notna() & (df["sgo"].astype(str).str.strip() != "")
     df["completed_dt"] = _safe_datetime(df["completed_at"], timezone)
+    df["reanalyzed_dt"] = _safe_datetime(df["reanalyzed_at"], timezone)
     df["modified_dt"] = _safe_datetime(df["modified_at"], timezone)
     df["completion_reference"] = df["completed_dt"].where(df["completed_dt"].notna(), df["modified_dt"])
     df["deadline_dt"] = pd.to_datetime(df["deadline"], errors="coerce")
@@ -325,6 +326,11 @@ def data_quality_summary(projects: pd.DataFrame, statuses: StatusConfig) -> dict
     pool = df[df["status_norm"].isin(statuses.project_pool_set)].copy()
     available = pool[pool["assignee_norm"] == ""]
     assigned = pool[pool["assignee_norm"] != ""]
+    valid_sgo = pool.loc[pool["sgo_present"], "sgo"].astype(str).str.strip()
+    duplicate_sgo = int(valid_sgo.duplicated(keep=False).sum())
+    valid_notes = pool.loc[pool["note"].notna(), "note"].astype(str).str.strip()
+    valid_notes = valid_notes[valid_notes != ""]
+    duplicate_notes = int(valid_notes.duplicated(keep=False).sum())
     return {
         "em_projeto": int(len(pool)),
         "disponiveis": int(len(available)),
@@ -332,4 +338,6 @@ def data_quality_summary(projects: pd.DataFrame, statuses: StatusConfig) -> dict
         "disponiveis_sem_pln": int((~available["posts_valid"]).sum()),
         "atribuidos_sem_pln": int((~assigned["posts_valid"]).sum()),
         "disponiveis_sem_sgo": int((~available["sgo_present"]).sum()),
+        "sgo_duplicado": duplicate_sgo,
+        "nota_duplicada": duplicate_notes,
     }

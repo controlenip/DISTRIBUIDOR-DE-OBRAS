@@ -245,3 +245,128 @@ def designer_monthly_prediction_advanced(
         ascending=[True, True, True],
     ).drop(columns="_trend_order")
     return result.reset_index(drop=True)
+
+
+def portfolio_balance_metrics(baseline: pd.DataFrame, target_posts: int, target_projects: int) -> dict[str, float]:
+    """Return understandable balance KPIs for the active portfolio."""
+    if baseline.empty:
+        return {
+            "score": 100.0,
+            "avg_posts": 0.0,
+            "min_posts": 0.0,
+            "max_posts": 0.0,
+            "spread_posts": 0.0,
+            "avg_coverage": 0.0,
+        }
+    posts = pd.to_numeric(baseline.get("PLN já atribuído", 0), errors="coerce").fillna(0).astype(float)
+    projects = pd.to_numeric(baseline.get("Projetos já atribuídos", 0), errors="coerce").fillna(0).astype(float)
+    posts_cov = (posts / max(1, target_posts) * 100).clip(0, 100)
+    proj_cov = (projects / max(1, target_projects) * 100).clip(0, 100)
+    coverage = pd.concat([posts_cov, proj_cov], axis=1).min(axis=1)
+    # 100 means similar coverage across the team. Coverage itself is shown separately,
+    # so an equally empty team is not mistaken for a well-covered team.
+    dispersion = float(coverage.std(ddof=0)) if len(coverage) > 1 else 0.0
+    score = max(0.0, 100.0 - min(100.0, dispersion * 1.6))
+    return {
+        "score": round(score, 1),
+        "avg_posts": round(float(posts.mean()), 1),
+        "min_posts": round(float(posts.min()), 1),
+        "max_posts": round(float(posts.max()), 1),
+        "spread_posts": round(float(posts.max() - posts.min()), 1),
+        "avg_coverage": round(float(coverage.mean()), 1),
+    }
+
+
+def designer_daily_history(
+    projects: pd.DataFrame,
+    designer: str,
+    end_date: date,
+    targets,
+    timezone: str = "America/Fortaleza",
+    days: int = 20,
+) -> pd.DataFrame:
+    """Daily history for one designer across the last N business days."""
+    df = prepare_projects(projects, timezone)
+    business = []
+    current = end_date
+    while len(business) < max(1, int(days)):
+        if current.weekday() < 5:
+            business.append(current)
+        current -= timedelta(days=1)
+    business = list(reversed(business))
+
+    completed = df[df["completed_dt"].notna()].copy()
+    completed["work_date"] = completed["completed_dt"].dt.date
+    norm = normalize_person_name(designer)
+    completed = completed[completed["assignee_norm"] == norm]
+
+    rows: list[dict] = []
+    for day in business:
+        d = completed[completed["work_date"] == day]
+        posts = int(d.loc[d["production_posts_valid"], "production_posts"].sum()) if not d.empty else 0
+        projects_count = int(len(d))
+        full = posts >= targets.target_posts and projects_count >= targets.target_projects
+        minimum = posts >= targets.min_posts and projects_count >= targets.min_projects
+        if full:
+            status = "Meta cheia"
+        elif minimum:
+            status = "Faixa mínima"
+        else:
+            status = "Abaixo da meta"
+        rows.append({
+            "Data": day,
+            "Postes": posts,
+            "Projetos": projects_count,
+            "Meta postes": targets.target_posts,
+            "Meta projetos": targets.target_projects,
+            "Situação": status,
+        })
+    return pd.DataFrame(rows)
+
+
+def daily_close_summary(snapshot: pd.DataFrame, targets) -> dict[str, int]:
+    if snapshot.empty:
+        return {"total": 0, "full": 0, "minimum": 0, "below": 0, "lack_load": 0, "data_issue": 0}
+    posts = pd.to_numeric(snapshot.get("Postes realizados", 0), errors="coerce").fillna(0)
+    projects = pd.to_numeric(snapshot.get("Projetos realizados", 0), errors="coerce").fillna(0)
+    full_mask = (posts >= targets.target_posts) & (projects >= targets.target_projects)
+    min_mask = (posts >= targets.min_posts) & (projects >= targets.min_projects) & ~full_mask
+    below_mask = ~(full_mask | min_mask)
+    return {
+        "total": int(len(snapshot)),
+        "full": int(full_mask.sum()),
+        "minimum": int(min_mask.sum()),
+        "below": int(below_mask.sum()),
+        "lack_load": int(snapshot.get("Situação", pd.Series(dtype=str)).isin(["Falta de carga"]).sum()),
+        "data_issue": int(snapshot.get("Situação", pd.Series(dtype=str)).isin(["PLN pendente na carteira"]).sum()),
+    }
+
+
+def designer_quality_proxy(
+    projects: pd.DataFrame,
+    designers: list[str],
+    start_date: date,
+    end_date: date,
+    timezone: str = "America/Fortaleza",
+) -> pd.DataFrame:
+    """Optional quality signal based on 'Data da reanálise' when the source provides it.
+
+    This is intentionally labelled as reanalysis, not as an error/rework verdict.
+    """
+    df = prepare_projects(projects, timezone)
+    completed = df[df["completed_dt"].notna()].copy()
+    completed["work_date"] = completed["completed_dt"].dt.date
+    completed = completed[(completed["work_date"] >= start_date) & (completed["work_date"] <= end_date)]
+    rows=[]
+    for designer in designers:
+        norm = normalize_person_name(designer)
+        d = completed[completed["assignee_norm"] == norm]
+        total = int(len(d))
+        rean = int(d["reanalyzed_dt"].notna().sum()) if "reanalyzed_dt" in d.columns else 0
+        rows.append({
+            "Projetista": designer,
+            "Projetos entregues": total,
+            "Com reanálise registrada": rean,
+            "Reanálise registrada %": round((rean / total * 100) if total else 0.0, 1),
+        })
+    return pd.DataFrame(rows)
