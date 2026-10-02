@@ -365,11 +365,12 @@ def data_quality_summary(projects: pd.DataFrame, statuses: StatusConfig) -> dict
     completed_status = df[df["status_norm"].isin(statuses.completed_set)].copy()
     completed_without_delivery_date = int(completed_status["completed_dt"].isna().sum())
     completed_with_delivery_date = int(completed_status["completed_dt"].notna().sum())
+    source_is_vu_available = available.get("source_base", pd.Series("", index=available.index)).astype(str).eq("VU")
     return {
         "em_projeto": int(len(pool)),
         "disponiveis": int(len(available)),
         "atribuidos": int(len(assigned)),
-        "disponiveis_sem_pln": int((~available["posts_valid"]).sum()),
+        "disponiveis_sem_pln": int(((~available["posts_valid"]) & (~source_is_vu_available)).sum()),
         "atribuidos_sem_pln": int((~assigned["posts_valid"]).sum()),
         "disponiveis_sem_sgo": int((~available["sgo_present"]).sum()),
         "sgo_duplicado": duplicate_sgo,

@@ -64,6 +64,12 @@ def _pick_project(
         work = work[(current_posts + work["posts"].astype(int)) <= int(max_portfolio_posts)]
     if max_portfolio_projects is not None and current_projects + 1 > int(max_portfolio_projects):
         return None
+    # VU projects have no post quantity. They may help only while the designer
+    # still needs projects; they must never be used to solve a posts-only deficit.
+    if need_projects <= 0 and "_workload_known" in work.columns:
+        work = work[work["_workload_known"].fillna(False).astype(bool)]
+        if work.empty:
+            return None
     # Projetos individuais acima da meta diária são tratados como carga especial.
     # Para garantir a trava de forma determinística a partir da BASE, a automação
     # só entrega esse tipo de obra para quem está sem projetos Em projeto.
@@ -75,7 +81,10 @@ def _pick_project(
     if experience_enabled:
         penalties: dict[int, tuple[int, int] | None] = {}
         for idx, row in work.iterrows():
-            penalties[idx] = match_penalty(designer_experience, row.get("_difficulty", "Médio"), experience_mode)
+            if str(row.get("source_base", "")) == "VU" and not str(row.get("project_type", "") or "").strip():
+                penalties[idx] = (0, 0)
+            else:
+                penalties[idx] = match_penalty(designer_experience, row.get("_difficulty", "Médio"), experience_mode)
         if str(experience_mode or "").strip().casefold() == "estrito":
             allowed = [idx for idx, penalty in penalties.items() if penalty is not None]
             work = work.loc[allowed]
@@ -102,7 +111,8 @@ def _pick_project(
         exp_penalty = penalties.get(row.name) or (0, 0)
         # Experience matching comes before queue fit so hard/easy work tends to the
         # appropriate profile. Priority/deadline still break ties inside the match.
-        return (exp_penalty[0], exp_penalty[1], priority_rank, deadline_ord, fit, posts, str(row.get("item_id", "")))
+        unknown_workload = 0 if bool(row.get("_workload_known", row.get("posts_valid", False))) else 1
+        return (exp_penalty[0], exp_penalty[1], priority_rank, unknown_workload, deadline_ord, fit, posts, str(row.get("item_id", "")))
 
     best_idx = min(work.index, key=lambda idx: score(work.loc[idx]))
     return work.loc[best_idx]
@@ -154,12 +164,16 @@ def suggest_assignments(
         for k, v in (designer_experience or {}).items()
     }
 
+    source_is_vu = df.get("source_base", pd.Series("", index=df.index)).astype(str).eq("VU")
     available = df[
         df["status_norm"].isin(statuses.project_pool_set)
         & (df["assignee_norm"] == "")
-        & df["posts_valid"]
+        & (df["posts_valid"] | source_is_vu)
         & df["sgo_present"]
     ].copy()
+    # VU has no post quantity by design. It contributes one project to the
+    # project-count target, while adding zero known posts to post coverage.
+    available["_workload_known"] = available["posts_valid"].astype(bool)
 
     if snapshots.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -277,6 +291,8 @@ def suggest_assignments(
         is_oversized_project = posts > int(targets.target_posts)
 
         reason_parts = [f"menor cobertura da equipe ({before_posts} postes / {before_projects} projetos)"]
+        if str(chosen_project.get("source_base", "")) == "VU" and not bool(chosen_project.get("_workload_known", False)):
+            reason_parts.append("projeto VU sem quantidade de postes; conta somente para a meta de projetos")
         if experience_enabled:
             reason_parts.append(
                 f"perfil {chosen_experience} compatível com dificuldade {difficulty_value}"
@@ -295,10 +311,12 @@ def suggest_assignments(
             {
                 "Projetista": designer,
                 "item_id": item_id,
+                "Base de origem": chosen_project.get("source_base", ""),
                 "Nº da nota": chosen_project.get("note"),
                 "Nota SGO": chosen_project.get("sgo"),
-                "Postes Alterados/Novos": posts,
-                # Backward-compatible alias for workers/tests created before V13.
+                "Postes Alterados/Novos": posts if bool(chosen_project.get("_workload_known", chosen_project.get("posts_valid", False))) else None,
+                "Quantidade de postes informada": bool(chosen_project.get("_workload_known", chosen_project.get("posts_valid", False))),
+                # Backward-compatible numeric alias used internally for calculations.
                 "PLN": posts,
                 "PI (Tipo Projeto)": project_type_value,
                 "Dificuldade": difficulty_value,

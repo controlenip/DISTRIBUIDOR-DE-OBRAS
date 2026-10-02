@@ -75,7 +75,7 @@ def _add_distribution_summary_sheet(
     ws["A1"] = "DISTRIBUIÇÃO AUTOMÁTICA DE OBRAS"
     ws["A1"].font = Font(bold=True, size=14, color="FFFFFF")
     ws["A1"].fill = PatternFill("solid", fgColor="1F4E78")
-    ws.merge_cells("A1:O1")
+    ws.merge_cells("A1:P1")
     ws["A2"] = "Gerado em"
     ws["B2"] = generated_at.strftime("%d/%m/%Y %H:%M:%S")
     ws["A3"] = "Meta diária"
@@ -85,7 +85,7 @@ def _add_distribution_summary_sheet(
 
     start_row = 6
     headers = [
-        "Projetista", "Nº da nota", "Nota SGO", "PI (Tipo Projeto)", "Dificuldade",
+        "Projetista", "Base de origem", "Nº da nota", "Nota SGO", "PI (Tipo Projeto)", "Dificuldade",
         "Experiência projetista", "Postes Alterados/Novos", "Prioridade", "Regional", "Município", "Prazo",
         "Carga antes", "Carga depois", "Projetos antes/depois", "Motivo"
     ]
@@ -98,6 +98,7 @@ def _add_distribution_summary_sheet(
     for r_idx, (_, row) in enumerate(suggestions.iterrows(), start=start_row + 1):
         values = [
             row.get("Projetista"),
+            row.get("Base de origem"),
             row.get("Nº da nota"),
             row.get("Nota SGO"),
             row.get("PI (Tipo Projeto)"),
@@ -143,8 +144,8 @@ def _add_distribution_summary_sheet(
                 ws.cell(r_idx, c_idx, row.get(col_name))
 
     widths = {
-        "A": 28, "B": 18, "C": 18, "D": 18, "E": 14, "F": 22, "G": 22, "H": 14,
-        "I": 18, "J": 22, "K": 18, "L": 16, "M": 16, "N": 20, "O": 70
+        "A": 28, "B": 18, "C": 18, "D": 18, "E": 18, "F": 14, "G": 22, "H": 22,
+        "I": 14, "J": 18, "K": 22, "L": 18, "M": 16, "N": 16, "O": 20, "P": 70
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
@@ -201,6 +202,77 @@ def generate_distributed_excel_bytes(
         generated_at=generated_at,
     )
 
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+def _apply_vu_assignments_to_workbook(wb, suggestions: pd.DataFrame) -> int:
+    """Apply VU assignments without changing columns A/C.
+
+    The VU input is read only from A (project number) and C (status). Because the
+    source has no assignee field, the generated copy receives/uses a column named
+    'Projetista atribuído' (created at D when absent). Columns A and C remain untouched.
+    """
+    if suggestions.empty:
+        return 0
+    ws = wb[wb.sheetnames[0]]
+    # VU contract: A = project number, C = status.
+    project_col = 1
+    status_col = 3
+    assignee_col = None
+    for col in range(1, ws.max_column + 1):
+        value = normalize_column_label(ws.cell(1, col).value)
+        if value in {normalize_column_label("Projetista atribuído"), normalize_column_label("Projetistas"), normalize_column_label("Projetista")}:
+            assignee_col = col
+            break
+    if assignee_col is None:
+        assignee_col = max(4, ws.max_column + 1)
+        ws.cell(1, assignee_col).value = "Projetista atribuído"
+        ws.cell(1, assignee_col).font = Font(bold=True)
+
+    applied = 0
+    for _, row in suggestions.iterrows():
+        item_id = str(row.get("item_id", ""))
+        if not item_id.startswith("excel-vu-"):
+            continue
+        try:
+            excel_row = int(item_id.rsplit("-", 1)[1])
+        except Exception as exc:
+            raise ValueError(f"item_id VU inválido: {item_id}") from exc
+
+        current_status = str(ws.cell(excel_row, status_col).value or "").strip().casefold()
+        current_assignee = str(ws.cell(excel_row, assignee_col).value or "").strip()
+        if current_status != "em projeto":
+            raise ValueError(f"Linha {excel_row}: status VU não é 'Em projeto'.")
+        if current_assignee:
+            raise ValueError(f"Linha {excel_row}: projeto VU já possui projetista '{current_assignee}'.")
+        ws.cell(excel_row, assignee_col).value = str(row["Projetista"])
+        applied += 1
+    return applied
+
+
+def generate_vu_distributed_excel_bytes(
+    source_bytes: bytes,
+    suggestions: pd.DataFrame,
+    distribution_summary: pd.DataFrame | None = None,
+    target_posts: int = 30,
+    target_projects: int = 5,
+    generated_at: datetime | None = None,
+) -> bytes:
+    """Generate a VU copy with assignments while preserving columns A and C."""
+    if not source_bytes:
+        raise ValueError("BASE LIST VU vazia ou não carregada.")
+    wb = load_workbook(BytesIO(source_bytes))
+    _apply_vu_assignments_to_workbook(wb, suggestions)
+    _add_distribution_summary_sheet(
+        wb,
+        suggestions,
+        distribution_summary=distribution_summary,
+        target_posts=target_posts,
+        target_projects=target_projects,
+        generated_at=generated_at,
+    )
     output = BytesIO()
     wb.save(output)
     return output.getvalue()

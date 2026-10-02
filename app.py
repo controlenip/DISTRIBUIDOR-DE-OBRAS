@@ -14,8 +14,9 @@ from src.audit_store import AuditStore
 from src.automation_engine import AutomationEngine, AutomationPolicy
 from src.demo_data import sample_designers_df, sample_projects
 from src.distribution_engine import suggest_assignments
-from src.excel_loader import load_base_excel, load_designers_excel
-from src.excel_writer import generate_distributed_excel_bytes
+from src.excel_loader import load_base_excel, load_vu_excel, load_designers_excel
+from src.source_combiner import combine_levantamento_vu
+from src.excel_writer import generate_distributed_excel_bytes, generate_vu_distributed_excel_bytes
 from src.experience_rules import (
     DIFFICULTY_LEVELS,
     EXPERIENCE_LEVELS,
@@ -333,6 +334,8 @@ def render_insights(items: list[str], max_items: int = 4):
 def reset_generated_output():
     st.session_state.generated_excel_bytes = b""
     st.session_state.generated_excel_name = ""
+    st.session_state.generated_vu_excel_bytes = b""
+    st.session_state.generated_vu_excel_name = ""
     st.session_state.generated_distribution_suggestions = pd.DataFrame()
     st.session_state.generated_distribution_summary = pd.DataFrame()
 
@@ -366,6 +369,8 @@ BASE_DEFAULTS = {
 SESSION_DEFAULTS = {
     "demo_projects": sample_projects(TIMEZONE),
     "excel_projects": pd.DataFrame(),
+    "excel_projects_levantamento": pd.DataFrame(),
+    "excel_projects_vu": pd.DataFrame(),
     "uploaded_designers": pd.DataFrame(),
     "graph_projects": pd.DataFrame(),
     "last_sync": None,
@@ -373,9 +378,15 @@ SESSION_DEFAULTS = {
     "base_excel_bytes": b"",
     "base_excel_name": "",
     "base_excel_signature": "",
+    "vu_excel_bytes": b"",
+    "vu_excel_name": "",
+    "vu_excel_signature": "",
+    "vu_overlap_count": 0,
     "designers_signature": "",
     "generated_excel_bytes": b"",
     "generated_excel_name": "",
+    "generated_vu_excel_bytes": b"",
+    "generated_vu_excel_name": "",
     "generated_distribution_suggestions": pd.DataFrame(),
     "generated_distribution_summary": pd.DataFrame(),
     "simulated_suggestions": pd.DataFrame(),
@@ -409,6 +420,8 @@ for key, default in SESSION_DEFAULTS.items():
 def clear_working_data():
     st.session_state.demo_projects = sample_projects(TIMEZONE)
     st.session_state.excel_projects = pd.DataFrame()
+    st.session_state.excel_projects_levantamento = pd.DataFrame()
+    st.session_state.excel_projects_vu = pd.DataFrame()
     st.session_state.uploaded_designers = pd.DataFrame()
     st.session_state.graph_projects = pd.DataFrame()
     st.session_state.last_sync = None
@@ -416,6 +429,10 @@ def clear_working_data():
     st.session_state.base_excel_bytes = b""
     st.session_state.base_excel_name = ""
     st.session_state.base_excel_signature = ""
+    st.session_state.vu_excel_bytes = b""
+    st.session_state.vu_excel_name = ""
+    st.session_state.vu_excel_signature = ""
+    st.session_state.vu_overlap_count = 0
     st.session_state.designers_signature = ""
     st.session_state.designer_experience_profile = pd.DataFrame()
     st.session_state.project_difficulty_profile = pd.DataFrame()
@@ -509,9 +526,9 @@ st.sidebar.caption("Modo: **Administrador**" if CAN_EDIT else "Modo: **Consulta*
 
 st.sidebar.divider()
 st.sidebar.markdown("**Como usar**")
-st.sidebar.caption("1. Carregue as duas planilhas")
+st.sidebar.caption("1. Carregue as bases e a lista de projetistas")
 st.sidebar.caption("2. Simule e confira")
-st.sidebar.caption("3. Gere e baixe a nova BASE LIST")
+st.sidebar.caption("3. Gere e baixe as BASE LIST distribuídas")
 
 st.sidebar.divider()
 if st.sidebar.button("🧹 LIMPAR DADOS", type="primary", use_container_width=True, help="Apaga arquivos e resultados temporários desta sessão."):
@@ -591,18 +608,45 @@ if st.session_state.get("data_cleared_notice"):
 # -----------------------------------------------------------------------------
 # SOURCE INPUTS
 # -----------------------------------------------------------------------------
+def _tag_excel_source(df: pd.DataFrame, source_label: str) -> pd.DataFrame:
+    """Tag rows so two uploaded workbooks can coexist without item_id collisions."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    out["source_base"] = source_label
+    out["source_item_id"] = out["item_id"].astype(str)
+    out["item_id"] = source_label + "::" + out["source_item_id"]
+    return out
+
+
+def _refresh_combined_excel_projects() -> None:
+    """Build the mandatory combined source used by analytics/distribution."""
+    combined, overlap = combine_levantamento_vu(
+        st.session_state.excel_projects_levantamento,
+        st.session_state.excel_projects_vu,
+    )
+    st.session_state.excel_projects = combined
+    st.session_state.vu_overlap_count = overlap
+
+
 def render_excel_uploads():
-    st.markdown('<div class="section-title">Passo 1 — Carregue os arquivos</div>', unsafe_allow_html=True)
-    st.caption("BASE LIST exportada + lista de projetistas habilitados a receber obras.")
-    left, right = st.columns(2)
-    with left:
-        base_upload = st.file_uploader(
-            "BASE LIST (.xlsx)", type=["xlsx"], key=f"base_list_v13_{st.session_state.uploader_epoch}",
-            help="Arquivo exportado do Microsoft Lists com as obras.",
+    st.markdown('<div class="section-title">Passo 1 — Carregue os 3 arquivos obrigatórios</div>', unsafe_allow_html=True)
+    st.caption(
+        "A ferramenta só libera análise e distribuição quando **BASE LIST LEVANTAMENTO + BASE LIST VU + PROJETISTAS** estiverem carregados. "
+        "As duas bases de obras se complementam e formam uma única fila maior de distribuição."
+    )
+    col_lev, col_vu, col_proj = st.columns(3)
+
+    with col_lev:
+        levantamento_upload = st.file_uploader(
+            "BASE LIST LEVANTAMENTO (.xlsx)",
+            type=["xlsx"],
+            key=f"base_list_levantamento_v19_{st.session_state.uploader_epoch}",
+            help="Base completa: Nota SGO, Status, Tipo Projeto, Postes Alterados/Novos, Projetista, Data de entrega etc.",
         )
-        if base_upload is not None:
+        if levantamento_upload is not None:
             try:
-                base_bytes = base_upload.getvalue()
+                base_bytes = levantamento_upload.getvalue()
                 sig = hashlib.sha256(base_bytes).hexdigest()
                 if sig != st.session_state.base_excel_signature:
                     reset_simulation()
@@ -610,15 +654,45 @@ def render_excel_uploads():
                     st.session_state.pop("project_difficulty_editor_v13", None)
                     st.session_state.pop("distribution_editor_v13", None)
                 st.session_state.base_excel_bytes = base_bytes
-                st.session_state.base_excel_name = base_upload.name
+                st.session_state.base_excel_name = levantamento_upload.name
                 st.session_state.base_excel_signature = sig
-                st.session_state.excel_projects = load_base_excel(base_upload)
-                st.success(f"✅ BASE LIST pronta — {len(st.session_state.excel_projects):,} registros".replace(",", "."))
+                loaded = load_base_excel(BytesIO(base_bytes))
+                st.session_state.excel_projects_levantamento = _tag_excel_source(loaded, "LEVANTAMENTO")
+                _refresh_combined_excel_projects()
+                st.success(f"✅ LEVANTAMENTO pronta — {len(loaded):,} registros".replace(",", "."))
             except Exception as exc:
-                st.error(f"Não foi possível ler a BASE LIST: {exc}")
-    with right:
+                st.error(f"Não foi possível ler a BASE LIST LEVANTAMENTO: {exc}")
+
+    with col_vu:
+        vu_upload = st.file_uploader(
+            "BASE LIST VU (Visualização Única) (.xlsx)",
+            type=["xlsx"],
+            key=f"base_list_vu_v19_{st.session_state.uploader_epoch}",
+            help="A ferramenta lê somente A = número do projeto e C = status. Projetos 'Em projeto' entram como nova fonte da fila.",
+        )
+        if vu_upload is not None:
+            try:
+                vu_bytes = vu_upload.getvalue()
+                sig = hashlib.sha256(vu_bytes).hexdigest()
+                if sig != st.session_state.vu_excel_signature:
+                    reset_simulation()
+                    st.session_state.experience_profile_source_signature = ""
+                    st.session_state.pop("project_difficulty_editor_v13", None)
+                    st.session_state.pop("distribution_editor_v13", None)
+                st.session_state.vu_excel_bytes = vu_bytes
+                st.session_state.vu_excel_name = vu_upload.name
+                st.session_state.vu_excel_signature = sig
+                loaded = load_vu_excel(BytesIO(vu_bytes))
+                st.session_state.excel_projects_vu = _tag_excel_source(loaded, "VU")
+                _refresh_combined_excel_projects()
+                em_projeto = int(loaded["status"].astype(str).str.strip().str.casefold().eq("em projeto").sum())
+                st.success(f"✅ VU pronta — {em_projeto} projetos Em projeto")
+            except Exception as exc:
+                st.error(f"Não foi possível ler a BASE LIST VU: {exc}")
+
+    with col_proj:
         designer_upload = st.file_uploader(
-            "PROJETISTAS (.xlsx)", type=["xlsx"], key=f"designers_v13_{st.session_state.uploader_epoch}",
+            "PROJETISTAS (.xlsx)", type=["xlsx"], key=f"designers_v19_{st.session_state.uploader_epoch}",
             help="Lista oficial de projetistas que podem receber novas obras.",
         )
         if designer_upload is not None:
@@ -631,10 +705,31 @@ def render_excel_uploads():
                     st.session_state.pop("designer_experience_editor_v13", None)
                     st.session_state.pop("distribution_editor_v13", None)
                 st.session_state.designers_signature = sig
-                st.session_state.uploaded_designers = load_designers_excel(designer_upload)
+                st.session_state.uploaded_designers = load_designers_excel(BytesIO(designer_bytes))
                 st.success(f"✅ Lista pronta — {len(st.session_state.uploaded_designers)} projetistas")
             except Exception as exc:
                 st.error(f"Não foi possível ler PROJETISTAS.xlsx: {exc}")
+
+    have_lev = not st.session_state.excel_projects_levantamento.empty
+    have_vu = not st.session_state.excel_projects_vu.empty
+    have_designers = not st.session_state.uploaded_designers.empty
+    ready_count = sum([have_lev, have_vu, have_designers])
+    st.progress(ready_count / 3, text=f"{ready_count}/3 arquivos carregados")
+    if ready_count < 3:
+        missing = []
+        if not have_lev: missing.append("BASE LIST LEVANTAMENTO")
+        if not have_vu: missing.append("BASE LIST VU")
+        if not have_designers: missing.append("PROJETISTAS")
+        st.warning("Distribuição bloqueada. Falta carregar: **" + " + ".join(missing) + "**.")
+    else:
+        _refresh_combined_excel_projects()
+        vu_added = int((st.session_state.excel_projects.get("source_base", pd.Series(dtype=str)) == "VU").sum())
+        lev_count = len(st.session_state.excel_projects_levantamento)
+        overlap = int(st.session_state.get("vu_overlap_count", 0))
+        st.success(
+            f"✅ Base combinada pronta: {lev_count} registros do LEVANTAMENTO + {vu_added} projetos exclusivos da VU."
+            + (f" {overlap} projeto(s) repetido(s) nas duas bases foram mantidos apenas pelo LEVANTAMENTO." if overlap else "")
+        )
 
 
 def sync_lists_now():
@@ -693,7 +788,15 @@ else:
     designers_df = sample_designers_df()
 
 DESIGNERS = designers_df["name"].tolist() if not designers_df.empty else []
-source_ready = bool(DESIGNERS) and not projects.empty
+if source_mode == "Excel - validação":
+    source_ready = (
+        bool(DESIGNERS)
+        and not st.session_state.excel_projects_levantamento.empty
+        and not st.session_state.excel_projects_vu.empty
+        and not projects.empty
+    )
+else:
+    source_ready = bool(DESIGNERS) and not projects.empty
 
 if source_mode == "Microsoft Lists" and GRAPH_READY and st.session_state.auto_sync_lists:
     @st.fragment(run_every="5m")
@@ -708,10 +811,10 @@ if source_mode == "Microsoft Lists" and GRAPH_READY and st.session_state.auto_sy
 
 if not source_ready:
     if PAGE != "🏠 Início":
-        st.warning("Comece pela página **Início** e carregue a BASE LIST e a planilha PROJETISTAS.")
+        st.warning("Comece pela página **Início** e carregue os **3 arquivos obrigatórios**: BASE LIST LEVANTAMENTO + BASE LIST VU + PROJETISTAS.")
     else:
         if source_mode == "Excel - validação":
-            st.info("Assim que os dois arquivos forem carregados, a análise e os botões de distribuição serão liberados.")
+            st.info("A análise e a distribuição só serão liberadas depois que os **3 arquivos obrigatórios** forem carregados juntos.")
         elif source_mode == "Microsoft Lists":
             st.info("Carregue PROJETISTAS.xlsx e sincronize o Microsoft Lists para continuar.")
     st.stop()
@@ -815,13 +918,14 @@ unlisted_names = sorted({
     name for name, norm in zip(pool_assigned["assignee"], pool_assigned["assignee_norm"])
     if norm not in eligible_norm
 })
+source_is_vu = prepared.get("source_base", pd.Series("", index=prepared.index)).astype(str).eq("VU")
 eligible_available = prepared[
     prepared["status_norm"].isin(STATUS.project_pool_set)
     & (prepared["assignee_norm"] == "")
-    & prepared["posts_valid"]
+    & (prepared["posts_valid"] | source_is_vu)
     & prepared["sgo_present"]
 ]
-available_posts = int(eligible_available["posts"].sum())
+available_posts = int(eligible_available.loc[eligible_available["posts_valid"], "posts"].sum())
 without_load = int((baseline["Projetos já atribuídos"] == 0).sum())
 pending_pln = int((baseline["Projetos sem PLN"] > 0).sum())
 partial_load = int(((baseline["Projetos já atribuídos"] > 0) & ((baseline["Meta restante postes"] > 0) | (baseline["Meta restante projetos"] > 0))).sum())
@@ -831,6 +935,7 @@ covered_load = int(((baseline["Projetos sem PLN"] == 0) & (baseline["Meta restan
 def current_simulation_signature() -> str:
     raw = "|".join([
         st.session_state.base_excel_signature or source_mode,
+        st.session_state.vu_excel_signature or "",
         st.session_state.designers_signature or str(len(DESIGNERS)),
         str(TARGETS.target_posts), str(TARGETS.target_projects),
         str(MAX_PORTFOLIO_POSTS), str(MAX_PORTFOLIO_PROJECTS), str(PRIORITY_ENABLED),
@@ -937,6 +1042,8 @@ def validate_manual_simulation(df: pd.DataFrame) -> list[str]:
         for _, row in df.iterrows():
             designer = str(row.get("Projetista", ""))
             project_type = str(row.get(PROJECT_TYPE_LABEL, "") or "").strip()
+            if str(row.get("Base de origem", "")) == "VU" and not project_type:
+                continue
             experience = exp_map.get(designer, "Intermediário")
             difficulty = difficulty_for_project_type(project_type)
             if match_penalty(experience, difficulty, "Estrito") is None:
@@ -961,6 +1068,26 @@ def run_simulation():
     reset_generated_output()
 
 
+def _suggestions_for_source(suggestions: pd.DataFrame, source_label: str) -> pd.DataFrame:
+    """Return suggestions for one Excel source with item_id restored for its workbook."""
+    if suggestions is None or suggestions.empty:
+        return pd.DataFrame(columns=suggestions.columns if suggestions is not None else [])
+    df = suggestions.copy()
+    ids = df["item_id"].astype(str)
+    prefix = source_label + "::"
+    mask = ids.str.startswith(prefix)
+    # Backward compatibility: unprefixed Excel IDs belong to Levantamento.
+    if source_label == "LEVANTAMENTO":
+        mask = mask | ids.str.startswith("excel-")
+    out = df[mask].copy()
+    if out.empty:
+        return out
+    out["item_id"] = out["item_id"].astype(str).map(
+        lambda value: value.split("::", 1)[1] if "::" in value else value
+    )
+    return out
+
+
 def generate_distribution_file(suggestions: pd.DataFrame | None = None):
     try:
         suggestions = suggestions.copy() if suggestions is not None else st.session_state.simulated_suggestions.copy()
@@ -976,18 +1103,39 @@ def generate_distribution_file(suggestions: pd.DataFrame | None = None):
             st.session_state.generated_distribution_suggestions = suggestions
             st.session_state.generated_distribution_summary = st.session_state.simulated_summary.copy()
             return
+
         generated_at = datetime.now(ZoneInfo(TIMEZONE))
-        output_bytes = generate_distributed_excel_bytes(
-            st.session_state.base_excel_bytes,
-            suggestions,
-            distribution_summary=st.session_state.simulated_summary,
-            target_posts=TARGETS.target_posts,
-            target_projects=TARGETS.target_projects,
-            generated_at=generated_at,
-        )
-        stem = (st.session_state.base_excel_name or "BASE_LIST.xlsx").rsplit(".", 1)[0]
-        st.session_state.generated_excel_bytes = output_bytes
-        st.session_state.generated_excel_name = f"{stem}_DISTRIBUIDA_{generated_at.strftime('%Y%m%d_%H%M%S')}.xlsx"
+        reset_generated_output()
+
+        lev_suggestions = _suggestions_for_source(suggestions, "LEVANTAMENTO")
+        vu_suggestions = _suggestions_for_source(suggestions, "VU")
+
+        if st.session_state.base_excel_bytes and not lev_suggestions.empty:
+            output_bytes = generate_distributed_excel_bytes(
+                st.session_state.base_excel_bytes,
+                lev_suggestions,
+                distribution_summary=st.session_state.simulated_summary,
+                target_posts=TARGETS.target_posts,
+                target_projects=TARGETS.target_projects,
+                generated_at=generated_at,
+            )
+            stem = (st.session_state.base_excel_name or "BASE_LIST_LEVANTAMENTO.xlsx").rsplit(".", 1)[0]
+            st.session_state.generated_excel_bytes = output_bytes
+            st.session_state.generated_excel_name = f"{stem}_DISTRIBUIDA_{generated_at.strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+        if st.session_state.vu_excel_bytes and not vu_suggestions.empty:
+            output_bytes_vu = generate_vu_distributed_excel_bytes(
+                st.session_state.vu_excel_bytes,
+                vu_suggestions,
+                distribution_summary=st.session_state.simulated_summary,
+                target_posts=TARGETS.target_posts,
+                target_projects=TARGETS.target_projects,
+                generated_at=generated_at,
+            )
+            stem_vu = (st.session_state.vu_excel_name or "BASE_LIST_VU.xlsx").rsplit(".", 1)[0]
+            st.session_state.generated_vu_excel_bytes = output_bytes_vu
+            st.session_state.generated_vu_excel_name = f"{stem_vu}_DISTRIBUIDA_{generated_at.strftime('%Y%m%d_%H%M%S')}.xlsx"
+
         st.session_state.generated_distribution_suggestions = suggestions
         st.session_state.generated_distribution_summary = st.session_state.simulated_summary.copy()
 
@@ -996,7 +1144,7 @@ def generate_distribution_file(suggestions: pd.DataFrame | None = None):
         audit.start_cycle(cycle_id, generated_at, source_mode, "export", len(projects), len(DESIGNERS))
         for _, row in suggestions.iterrows():
             audit.log_assignment(cycle_id, generated_at, row.to_dict(), "export", "success")
-        audit.finish_cycle(cycle_id, generated_at, "success", len(suggestions), len(suggestions), "Planilha distribuída gerada")
+        audit.finish_cycle(cycle_id, generated_at, "success", len(suggestions), len(suggestions), "Planilha(s) distribuída(s) gerada(s)")
 
         if WEBHOOK_URL and st.session_state.notify_after_distribution:
             try:
@@ -1006,29 +1154,48 @@ def generate_distribution_file(suggestions: pd.DataFrame | None = None):
                     f"{len(suggestions)} obra(s) distribuídas em {generated_at.strftime('%d/%m/%Y %H:%M')}.",
                 )
             except Exception as exc:
-                st.warning(f"A planilha foi gerada, mas a notificação não foi enviada: {exc}")
+                st.warning(f"A distribuição foi gerada, mas a notificação não foi enviada: {exc}")
     except Exception as exc:
         st.error(f"Não foi possível gerar a distribuição: {exc}")
 
 
 def render_download_result():
     suggestions = st.session_state.generated_distribution_suggestions
-    if source_mode == "Excel - validação" and st.session_state.generated_excel_bytes:
+    has_lev = bool(st.session_state.generated_excel_bytes)
+    has_vu = bool(st.session_state.generated_vu_excel_bytes)
+    if source_mode == "Excel - validação" and (has_lev or has_vu):
         st.markdown(
-            f'<div class="success-card"><b>✅ Distribuição pronta.</b><br>{len(suggestions)} obra(s) foram atribuídas em uma cópia da BASE LIST. O arquivo original não foi alterado.</div>',
+            f'<div class="success-card"><b>✅ Distribuição pronta.</b><br>{len(suggestions)} obra(s) foram atribuídas a partir da base combinada. Foram geradas cópias das bases de origem. Os arquivos originais não foram alterados.</div>',
             unsafe_allow_html=True,
         )
         st.write("")
-        left, right = st.columns([3, 1])
-        with left:
-            st.download_button(
-                "⬇️ BAIXAR BASE LIST DISTRIBUÍDA",
-                data=st.session_state.generated_excel_bytes,
-                file_name=st.session_state.generated_excel_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-        right.metric("Novas atribuições", len(suggestions))
+        download_cols = st.columns(2)
+        if has_lev:
+            lev_count = len(_suggestions_for_source(suggestions, "LEVANTAMENTO"))
+            with download_cols[0]:
+                st.download_button(
+                    f"⬇️ BAIXAR LEVANTAMENTO DISTRIBUÍDA ({lev_count})",
+                    data=st.session_state.generated_excel_bytes,
+                    file_name=st.session_state.generated_excel_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+        else:
+            with download_cols[0]:
+                st.info("Nenhuma nova atribuição na BASE LIST LEVANTAMENTO.")
+        if has_vu:
+            vu_count = len(_suggestions_for_source(suggestions, "VU"))
+            with download_cols[1]:
+                st.download_button(
+                    f"⬇️ BAIXAR BASE LIST VU DISTRIBUÍDA ({vu_count})",
+                    data=st.session_state.generated_vu_excel_bytes,
+                    file_name=st.session_state.generated_vu_excel_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+        else:
+            with download_cols[1]:
+                st.info("Nenhuma nova atribuição na BASE LIST VU.")
     elif source_mode == "Microsoft Lists" and not suggestions.empty:
         st.success(f"Prévia gerada com {len(suggestions)} nova(s) atribuição(ões).")
 
@@ -1049,7 +1216,7 @@ if PAGE == "🏠 Início":
     with s2:
         st.markdown('<div class="step-card"><span class="num">2</span><b>Simular</b><p>Confira quem receberá cada obra antes de alterar qualquer planilha.</p></div>', unsafe_allow_html=True)
     with s3:
-        st.markdown('<div class="step-card"><span class="num">3</span><b>Gerar e baixar</b><p>Somente após a conferência é criada uma nova BASE LIST distribuída.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-card"><span class="num">3</span><b>Gerar e baixar</b><p>Após a conferência, a ferramenta gera a(s) base(s) distribuída(s) mantendo a origem de cada obra.</p></div>', unsafe_allow_html=True)
 
     st.write("")
     st.markdown('<div class="section-title">Situação atual da equipe</div>', unsafe_allow_html=True)
@@ -1066,7 +1233,7 @@ if PAGE == "🏠 Início":
     )
 
     if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality.get("sgo_duplicado", 0):
-        st.warning("Há pendências de dados na BASE LIST. A ferramenta bloqueia automaticamente obras sem SGO ou Postes Alterados/Novos da distribuição.")
+        st.warning("Há pendências de dados nas bases carregadas. A ferramenta bloqueia automaticamente obras sem SGO ou Postes Alterados/Novos da distribuição.")
 
     st.markdown('<div class="section-title">Passo 2 — Simule antes de distribuir</div>', unsafe_allow_html=True)
     if EXPERIENCE_ENABLED:
@@ -1181,7 +1348,7 @@ elif PAGE == "⚡ Distribuir obras":
             st.markdown("**Dificuldade por PI (Tipo Projeto)**")
             diff_current = st.session_state.project_difficulty_profile.copy().reset_index(drop=True)
             if diff_current.empty:
-                st.warning("A BASE LIST não possui valores em PI (Tipo Projeto). O critério de experiência não poderá diferenciar as obras.")
+                st.warning("As bases carregadas não possuem valores em PI (Tipo Projeto). O critério de experiência não poderá diferenciar as obras.")
             elif CAN_EDIT:
                 diff_edited = st.data_editor(
                     diff_current,
@@ -1225,9 +1392,9 @@ elif PAGE == "⚡ Distribuir obras":
     d3.metric("Sem obras", without_load)
     d4.metric("Equilíbrio atual", f'{balance["score"]:.0f}%')
 
-    queue_cols = ["sgo", "project_type", "posts", "priority", "deadline", "regional", "municipality"]
+    queue_cols = [c for c in ["source_base", "sgo", "project_type", "posts", "priority", "deadline", "regional", "municipality"] if c in eligible_available.columns]
     queue = eligible_available[queue_cols].copy().rename(columns={
-        "sgo": "Nota SGO", "project_type": PROJECT_TYPE_LABEL, "posts": POSTS_LABEL,
+        "source_base": "Base de origem", "sgo": "Nota SGO", "project_type": PROJECT_TYPE_LABEL, "posts": POSTS_LABEL,
         "priority": "Prioridade", "deadline": "Prazo", "regional": "Regional", "municipality": "Município"
     })
     if EXPERIENCE_ENABLED and not queue.empty:
@@ -1247,7 +1414,7 @@ elif PAGE == "⚡ Distribuir obras":
         st.caption("Você pode retirar uma linha da distribuição ou trocar o projetista antes de gerar a planilha. O sistema valida o teto de carteira.")
         editor = sim.copy()
         editor.insert(0, "Incluir", True)
-        editable_cols = ["Incluir", "Projetista", "Nota SGO", PROJECT_TYPE_LABEL]
+        editable_cols = ["Incluir", "Projetista", "Base de origem", "Nota SGO", PROJECT_TYPE_LABEL]
         if EXPERIENCE_ENABLED:
             editable_cols += ["Dificuldade", "Experiência projetista"]
         editable_cols += [
@@ -1264,6 +1431,7 @@ elif PAGE == "⚡ Distribuir obras":
             column_config={
                 "Incluir": st.column_config.CheckboxColumn("Incluir", default=True),
                 "Projetista": st.column_config.SelectboxColumn("Projetista", options=DESIGNERS, required=True, width="large"),
+                "Base de origem": st.column_config.TextColumn("Base de origem", width="medium"),
                 PROJECT_TYPE_LABEL: st.column_config.TextColumn(PROJECT_TYPE_LABEL, width="medium"),
                 "Dificuldade": st.column_config.TextColumn("Dificuldade", width="small"),
                 "Experiência projetista": st.column_config.TextColumn("Experiência", width="medium"),
@@ -1291,7 +1459,7 @@ elif PAGE == "⚡ Distribuir obras":
 
             st.markdown('<div class="section-title">4 — Gerar resultado</div>', unsafe_allow_html=True)
             if CAN_EDIT and source_mode == "Excel - validação":
-                if st.button("✅ GERAR NOVA BASE LIST DISTRIBUÍDA", type="primary", use_container_width=True):
+                if st.button("✅ GERAR BASE(S) DISTRIBUÍDA(S)", type="primary", use_container_width=True):
                     st.session_state.simulated_suggestions = final_sim.copy()
                     generate_distribution_file(final_sim)
                 render_download_result()
@@ -1499,7 +1667,7 @@ elif PAGE == "⚙️ Regras e parâmetros":
     r4.metric("Bloqueados por projeto grande", locked_count)
     st.caption("Os valores podem ser alterados em ⚙️ Opções avançadas no menu lateral, no modo Administrador.")
 
-    st.markdown('<div class="section-title">Qualidade da BASE LIST</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Qualidade das bases carregadas</div>', unsafe_allow_html=True)
     q1, q2, q3, q4, q5, q6, q7 = st.columns(7)
     q1.metric("Em projeto", quality["em_projeto"])
     q2.metric("Disponíveis", quality["disponiveis"])
@@ -1517,8 +1685,8 @@ elif PAGE == "⚙️ Regras e parâmetros":
             prepared["status_norm"].isin(STATUS.project_pool_set)
             & (prepared["assignee_norm"] == "")
             & (~prepared["posts_valid"] | ~prepared["sgo_present"])
-        ][["note", "sgo", "posts", "regional", "municipality"]].rename(columns={
-            "note": "Nº da nota", "sgo": "Nota SGO", "posts": POSTS_LABEL, "regional": "Regional", "municipality": "Município"
+        ][[c for c in ["source_base", "note", "sgo", "posts", "regional", "municipality"] if c in prepared.columns]].rename(columns={
+            "source_base": "Base de origem", "note": "Nº da nota", "sgo": "Nota SGO", "posts": POSTS_LABEL, "regional": "Regional", "municipality": "Município"
         })
         if blocked.empty:
             st.success("Nenhuma obra disponível está bloqueada por falta de SGO ou Postes Alterados/Novos.")
@@ -1528,8 +1696,8 @@ elif PAGE == "⚙️ Regras e parâmetros":
     with st.expander("Concluídos sem Data de entrega do projeto (coluna V)", expanded=quality.get("concluidos_sem_data_entrega", 0) > 0):
         missing_delivery = prepared[
             prepared["status_norm"].isin(STATUS.completed_set) & prepared["completed_dt"].isna()
-        ][["note", "sgo", "assignee", "status", "posts", "regional", "municipality"]].rename(columns={
-            "note": "Nº da nota", "sgo": "Nota SGO", "assignee": "Projetista", "status": "Status",
+        ][[c for c in ["source_base", "note", "sgo", "assignee", "status", "posts", "regional", "municipality"] if c in prepared.columns]].rename(columns={
+            "source_base": "Base de origem", "note": "Nº da nota", "sgo": "Nota SGO", "assignee": "Projetista", "status": "Status",
             "posts": POSTS_LABEL, "regional": "Regional", "municipality": "Município"
         })
         if missing_delivery.empty:
@@ -1579,14 +1747,15 @@ elif PAGE == "⚙️ Regras e parâmetros":
             st.markdown("**Decisões registradas**")
             st.dataframe(assignments, use_container_width=True, hide_index=True)
 
-    with st.expander("Consultar a BASE LIST carregada"):
+    with st.expander("Consultar as bases carregadas"):
         show = prepared.copy()
         show["Disponibilidade"] = ""
         pool_mask = show["status_norm"].isin(STATUS.project_pool_set)
         show.loc[pool_mask & (show["assignee_norm"] == ""), "Disponibilidade"] = "Disponível"
         show.loc[pool_mask & (show["assignee_norm"] != ""), "Disponibilidade"] = "Atribuído"
-        display = show[["note", "sgo", "status", "project_type", "posts", "assignee", "regional", "municipality", "deadline", "Disponibilidade"]].rename(columns={
-            "note": "Nº da nota", "sgo": "Nota SGO", "status": "Status", "project_type": PROJECT_TYPE_LABEL, "posts": POSTS_LABEL,
+        consult_cols = [c for c in ["source_base", "note", "sgo", "status", "project_type", "posts", "assignee", "regional", "municipality", "deadline", "Disponibilidade"] if c in show.columns]
+        display = show[consult_cols].rename(columns={
+            "source_base": "Base de origem", "note": "Nº da nota", "sgo": "Nota SGO", "status": "Status", "project_type": PROJECT_TYPE_LABEL, "posts": POSTS_LABEL,
             "assignee": "Projetista", "regional": "Regional", "municipality": "Município", "deadline": "Prazo",
         })
         st.dataframe(display, use_container_width=True, hide_index=True)

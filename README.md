@@ -1,3 +1,42 @@
+# NIP Smart Distribuição — V19
+
+## Novidade da V19: LEVANTAMENTO + VU são obrigatórias e complementares
+
+No modo **Excel - validação**, a ferramenta só libera análise e distribuição quando os três arquivos abaixo estiverem carregados juntos:
+
+1. **BASE LIST LEVANTAMENTO**
+2. **BASE LIST VU (Visualização Única)**
+3. **PROJETISTAS**
+
+As duas bases de obras formam **uma única fila maior de distribuição**. Nenhuma delas funciona sozinha.
+
+### Como a BASE LIST VU é lida
+
+A VU usa somente:
+
+- **Coluna A** = número do projeto;
+- **Coluna C** = status do projeto.
+
+Somente linhas da VU com **Status = Em projeto** entram na fila. A coluna A é tratada como o número do projeto / Nota SGO para fins de distribuição.
+
+Como a VU não informa quantidade de postes, seus projetos contam para a **meta de quantidade de projetos**, mas não recebem uma quantidade fictícia de postes. A cobertura de postes continua sendo calculada com os projetos que possuem **Postes Alterados/Novos** informados na BASE LIST LEVANTAMENTO.
+
+### Combinação das bases
+
+- Projetos exclusivos do LEVANTAMENTO entram normalmente.
+- Projetos exclusivos da VU com status **Em projeto** são adicionados à fila.
+- Se o mesmo número de projeto existir nas duas bases, a ferramenta mantém o registro do **LEVANTAMENTO** para evitar distribuição duplicada, pois ele possui mais informações operacionais.
+
+### Saída
+
+A simulação mostra a **Base de origem** de cada obra. Na geração:
+
+- a cópia do LEVANTAMENTO continua preenchendo a coluna de **Projetistas**;
+- a cópia da VU preserva as colunas A e C e recebe uma coluna **Projetista atribuído** para registrar as obras VU distribuídas;
+- os arquivos originais nunca são alterados.
+
+---
+
 # NIP Smart Distribuição — V17
 
 
@@ -73,7 +112,7 @@ Uma obra pode entrar na distribuição automática quando:
 4. Defina o nível dos projetistas e a dificuldade de cada `PI (Tipo Projeto)`.
 5. Clique em **GERAR / ATUALIZAR SIMULAÇÃO**.
 6. Confira/ajuste a simulação.
-7. Gere e baixe a nova BASE LIST distribuída.
+7. Gere e baixe a nova(s) BASE LIST distribuída(s).
 8. Use **LIMPAR DADOS** antes de iniciar outro ciclo.
 
 ## PROJETISTAS.xlsx
