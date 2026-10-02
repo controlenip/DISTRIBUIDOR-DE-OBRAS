@@ -176,6 +176,66 @@ def compact_table_config():
 
 
 
+def compact_load_table(baseline: pd.DataFrame, target_posts: int, target_projects: int) -> pd.DataFrame:
+    """Compact portfolio table focused on the decision: who still needs load."""
+    columns = ["Projetista", "Carteira atual", "Ainda precisa", "Cobertura", "Situação"]
+    if baseline.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = baseline.copy()
+    for col in ["Projetos já atribuídos", "PLN já atribuído", "Projetos sem PLN", "Meta restante postes", "Meta restante projetos"]:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    def n(value) -> str:
+        value = float(value)
+        return str(int(value)) if value.is_integer() else f"{value:.1f}"
+
+    def status(row) -> str:
+        if row["Projetos sem PLN"] > 0:
+            return "🟡 PLN pendente"
+        if row["Projetos já atribuídos"] <= 0:
+            return "🔴 Sem carga"
+        if row["Meta restante postes"] <= 0 and row["Meta restante projetos"] <= 0:
+            return "✅ Meta coberta"
+        return "🟠 Carga parcial"
+
+    df["Carteira atual"] = df.apply(
+        lambda r: f'{n(r["PLN já atribuído"])} postes • {n(r["Projetos já atribuídos"])} proj.', axis=1
+    )
+    df["Ainda precisa"] = df.apply(
+        lambda r: f'{n(max(0, r["Meta restante postes"]))} postes • {n(max(0, r["Meta restante projetos"]))} proj.', axis=1
+    )
+
+    posts_cov = (df["PLN já atribuído"] / max(1, target_posts) * 100).clip(lower=0, upper=100)
+    projects_cov = (df["Projetos já atribuídos"] / max(1, target_projects) * 100).clip(lower=0, upper=100)
+    # Effective coverage uses the more restrictive dimension, because both goals matter.
+    df["Cobertura"] = pd.concat([posts_cov, projects_cov], axis=1).min(axis=1).round(0)
+    df["Situação"] = df.apply(status, axis=1)
+
+    # Most under-covered designers first; name breaks ties deterministically.
+    df = df.sort_values(["Cobertura", "Projetista"], ascending=[True, True])
+    return df[columns]
+
+
+def compact_load_config():
+    return {
+        "Projetista": st.column_config.TextColumn("Projetista", width="large"),
+        "Carteira atual": st.column_config.TextColumn("Carteira atual", width="medium"),
+        "Ainda precisa": st.column_config.TextColumn("Ainda precisa", width="medium"),
+        "Cobertura": st.column_config.ProgressColumn(
+            "Cobertura",
+            help="Cobertura efetiva da meta, considerando simultaneamente postes e quantidade de projetos.",
+            min_value=0,
+            max_value=100,
+            format="%d%%",
+            width="medium",
+        ),
+        "Situação": st.column_config.TextColumn("Situação", width="medium"),
+    }
+
+
 SECRETS = secrets_dict()
 TIMEZONE = nested(SECRETS, "app", "timezone", default="America/Fortaleza")
 TARGETS = Targets(
@@ -539,38 +599,61 @@ with tab_dashboard:
     )
 
 with tab_load:
-    st.subheader("Carga já atribuída e meta restante")
-    st.write(
-        "A carga considera obras com **Status = Em projeto** e **Projetistas preenchido**. "
-        "Para projetistas, o peso de distribuição continua sendo o **PLN da coluna R**."
+    st.subheader("Carteira dos projetistas")
+    st.caption(
+        f"Meta diária de referência: {TARGETS.target_posts} postes / {TARGETS.target_projects} projetos. "
+        "A carteira considera somente obras com Status = Em projeto e Projetistas preenchido; o peso da obra é o PLN da coluna R."
     )
-    load_cols = [
-        "Projetista", "Projetos já atribuídos", "PLN já atribuído", "Projetos sem PLN",
-        "Meta diária postes", "Meta diária projetos", "Meta restante postes", "Meta restante projetos",
-        "Cobertura postes %", "Cobertura projetos %", "Nota SGO na carteira", "Situação da carga",
-    ]
-    st.dataframe(baseline[load_cols], use_container_width=True, hide_index=True)
+
     no_load = baseline[baseline["Projetos já atribuídos"] == 0]
-    partial = baseline[(baseline["Projetos já atribuídos"] > 0) & ((baseline["Meta restante postes"] > 0) | (baseline["Meta restante projetos"] > 0))]
-    covered = baseline[(baseline["Meta restante postes"] == 0) & (baseline["Meta restante projetos"] == 0)]
-    b1, b2, b3 = st.columns(3)
-    b1.metric("Meta inteira a distribuir", len(no_load))
-    b2.metric("Parcialmente coberta", len(partial))
-    b3.metric("Carga cobre a meta", len(covered))
+    pending_pln = baseline[baseline["Projetos sem PLN"] > 0]
+    partial = baseline[(baseline["Projetos já atribuídos"] > 0) & (baseline["Projetos sem PLN"] == 0) & ((baseline["Meta restante postes"] > 0) | (baseline["Meta restante projetos"] > 0))]
+    covered = baseline[(baseline["Projetos sem PLN"] == 0) & (baseline["Meta restante postes"] == 0) & (baseline["Meta restante projetos"] == 0)]
 
-    e1, e2, e3, e4 = st.columns(4)
-    e1.metric("Carga média", f"{load_avg:.1f} postes")
-    e2.metric("Menor carteira", f"{load_min} postes")
-    e3.metric("Maior carteira", f"{load_max} postes")
-    e4.metric("Diferença maior-menor", f"{load_spread} postes")
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("Sem carga", len(no_load))
+    b2.metric("Carga parcial", len(partial))
+    b3.metric("Meta coberta", len(covered))
+    b4.metric("PLN pendente", len(pending_pln))
 
-    balance_chart = baseline[["Projetista", "PLN já atribuído", "Projetos já atribuídos"]].sort_values("PLN já atribuído", ascending=True)
-    fig = px.bar(
-        balance_chart, y="Projetista", x="PLN já atribuído", orientation="h",
-        hover_data=["Projetos já atribuídos"], title="Distribuição atual da carga entre projetistas",
+    st.markdown('<div class="section-title">Quem precisa receber carga</div>', unsafe_allow_html=True)
+    load_compact = compact_load_table(baseline, TARGETS.target_posts, TARGETS.target_projects)
+    st.dataframe(
+        load_compact,
+        use_container_width=True,
+        hide_index=True,
+        column_config=compact_load_config(),
+        height=min(650, 78 + 35 * len(load_compact)),
     )
-    fig.add_vline(x=TARGETS.target_posts, line_dash="dash", annotation_text=f"Meta {TARGETS.target_posts}")
-    st.plotly_chart(style_figure(fig, max(420, 26 * len(balance_chart))), use_container_width=True)
+
+    st.caption(
+        "Cobertura = menor avanço entre a meta de postes e a meta de projetos. "
+        "Assim, a ferramenta não considera uma carteira completa se apenas um dos dois objetivos estiver atendido."
+    )
+
+    with st.expander("Ver detalhes técnicos da carteira"):
+        detail_cols = [
+            "Projetista", "Projetos já atribuídos", "PLN já atribuído", "Projetos sem PLN",
+            "Meta restante postes", "Meta restante projetos", "Cobertura postes %",
+            "Cobertura projetos %", "Nota SGO na carteira", "Situação da carga",
+        ]
+        st.dataframe(baseline[detail_cols], use_container_width=True, hide_index=True)
+
+    c_balance, c_metrics = st.columns([1.65, 1])
+    with c_balance:
+        balance_chart = baseline[["Projetista", "PLN já atribuído", "Projetos já atribuídos"]].sort_values("PLN já atribuído", ascending=True)
+        fig = px.bar(
+            balance_chart, y="Projetista", x="PLN já atribuído", orientation="h",
+            hover_data=["Projetos já atribuídos"], title="Carga atual em postes por projetista",
+        )
+        fig.add_vline(x=TARGETS.target_posts, line_dash="dash", annotation_text=f"Referência {TARGETS.target_posts}")
+        st.plotly_chart(style_figure(fig, max(420, 26 * len(balance_chart))), use_container_width=True)
+    with c_metrics:
+        st.markdown('<div class="section-title">Equilíbrio da carteira</div>', unsafe_allow_html=True)
+        st.metric("Carga média", f"{load_avg:.1f} postes")
+        st.metric("Menor carteira", f"{load_min} postes")
+        st.metric("Maior carteira", f"{load_max} postes")
+        st.metric("Diferença maior-menor", f"{load_spread} postes")
 
 with tab_today:
     st.subheader("Produção diária dos projetistas")

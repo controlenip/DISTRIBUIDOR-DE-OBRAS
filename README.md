@@ -1,4 +1,4 @@
-# NIP Smart Distribuição — V7
+# NIP Smart Distribuição — V9
 
 Aplicação **Python + Streamlit** focada exclusivamente em **produtividade dos projetistas** e **distribuição igualitária de projetos de rede de distribuição**.
 
@@ -129,3 +129,16 @@ Nunca envie credenciais, `secrets.toml`, `BASE_LIST.xlsx` ou `PROJETISTAS.xlsx` 
 - Tabela de atenção reduzida para 6 colunas: Projetista, Produção hoje, Carteira atual, Falta para meta, Previsão 18h e Situação.
 - Indicadores detalhados permanecem disponíveis em área expansível.
 - Status exibidos com ícones para facilitar leitura rápida.
+
+
+## V9 - carteira simplificada
+
+A aba de carteira foi redesenhada para evitar rolagem horizontal e repetição de metas fixas. A visão principal agora contém apenas:
+
+- Projetista
+- Carteira atual (postes e projetos)
+- Ainda precisa (postes e projetos)
+- Cobertura efetiva da meta
+- Situação
+
+A cobertura efetiva considera simultaneamente a meta de postes e a meta de projetos, usando o menor avanço percentual entre as duas. Os campos técnicos continuam disponíveis em um expansor, sem poluir a visão operacional.
