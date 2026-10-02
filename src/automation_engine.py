@@ -25,6 +25,10 @@ class AutomationPolicy:
     max_portfolio_posts: int | None = 36
     max_portfolio_projects: int | None = 6
     priority_enabled: bool = True
+    experience_enabled: bool = False
+    experience_mode: str = "Preferencial"
+    designer_experience: dict[str, str] | None = None
+    project_difficulty: dict[str, str] | None = None
 
 
 @dataclass
@@ -123,6 +127,10 @@ class AutomationEngine:
             max_portfolio_projects=self.policy.max_portfolio_projects,
             priority_enabled=self.policy.priority_enabled,
             respect_time=True,
+            experience_enabled=self.policy.experience_enabled,
+            designer_experience=self.policy.designer_experience,
+            project_difficulty=self.policy.project_difficulty,
+            experience_mode=self.policy.experience_mode,
         )
 
         # Last defensive check: no duplicate item can appear in one cycle.

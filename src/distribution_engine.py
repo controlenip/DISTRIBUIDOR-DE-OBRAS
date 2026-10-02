@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .experience_rules import (
+    match_penalty,
+    normalize_difficulty_label,
+    normalize_experience_label,
+)
 from .metrics import prepare_projects
+from .name_utils import normalize_person_name, normalize_text
 from .work_schedule import nominal_minutes_for_workload
 
 
@@ -37,8 +43,16 @@ def _pick_project(
     max_portfolio_posts: int | None,
     max_portfolio_projects: int | None,
     priority_enabled: bool,
+    experience_enabled: bool = False,
+    designer_experience: str = "Intermediário",
+    experience_mode: str = "Preferencial",
 ) -> pd.Series | None:
-    """Pick one project that advances both targets without breaching portfolio limits."""
+    """Pick one project that advances targets without breaching portfolio limits.
+
+    When experience matching is enabled, exact experience/difficulty matches are
+    preferred. In strict mode, a project harder than the designer's experience
+    is excluded. In preferential mode it is kept only as fallback.
+    """
     if candidates.empty:
         return None
 
@@ -49,6 +63,18 @@ def _pick_project(
         return None
     if work.empty:
         return None
+
+    if experience_enabled:
+        penalties: dict[int, tuple[int, int] | None] = {}
+        for idx, row in work.iterrows():
+            penalties[idx] = match_penalty(designer_experience, row.get("_difficulty", "Médio"), experience_mode)
+        if str(experience_mode or "").strip().casefold() == "estrito":
+            allowed = [idx for idx, penalty in penalties.items() if penalty is not None]
+            work = work.loc[allowed]
+            if work.empty:
+                return None
+    else:
+        penalties = {idx: (0, 0) for idx in work.index}
 
     ideal_posts = (need_posts / max(1, need_projects)) if need_posts > 0 else 0.0
 
@@ -65,7 +91,10 @@ def _pick_project(
         deadline = row.get("_deadline_sort")
         deadline_ord = deadline.value if isinstance(deadline, pd.Timestamp) and deadline is not pd.NaT else pd.Timestamp.max.value
         priority_rank = int(row.get("_priority", 2)) if priority_enabled else 2
-        return (priority_rank, deadline_ord, fit, posts, str(row.get("item_id", "")))
+        exp_penalty = penalties.get(row.name) or (0, 0)
+        # Experience matching comes before queue fit so hard/easy work tends to the
+        # appropriate profile. Priority/deadline still break ties inside the match.
+        return (exp_penalty[0], exp_penalty[1], priority_rank, deadline_ord, fit, posts, str(row.get("item_id", "")))
 
     best_idx = min(work.index, key=lambda idx: score(work.loc[idx]))
     return work.loc[best_idx]
@@ -81,19 +110,38 @@ def suggest_assignments(
     max_portfolio_projects: int | None = None,
     priority_enabled: bool = True,
     respect_time: bool = True,
+    experience_enabled: bool = False,
+    designer_experience: dict[str, str] | None = None,
+    project_difficulty: dict[str, str] | None = None,
+    experience_mode: str = "Preferencial",
 ):
     """Suggest a fair, non-destructive distribution.
 
     Rules:
-    - only Status=Em projeto, empty assignee, valid SGO and PLN are eligible;
+    - only Status=Em projeto, empty assignee, valid SGO and Postes Alterados/Novos are eligible;
     - existing assignments are never moved;
     - lowest target coverage receives the next project (round-robin/water filling);
     - priority/deadline can influence which project is selected;
+    - optional experience matching uses PI (Tipo Projeto) as project difficulty;
     - portfolio caps prevent overload.
     """
     df = prepare_projects(projects, "America/Fortaleza")
     df["_priority"] = df["priority"].map(_priority)
     df["_deadline_sort"] = pd.to_datetime(df["deadline"], errors="coerce").fillna(pd.Timestamp.max)
+
+    difficulty_map_norm = {
+        normalize_text(k): normalize_difficulty_label(v)
+        for k, v in (project_difficulty or {}).items()
+        if str(k or "").strip()
+    }
+    df["_difficulty"] = df["project_type"].map(
+        lambda value: difficulty_map_norm.get(normalize_text(value), "Médio")
+    )
+
+    experience_map_norm = {
+        normalize_person_name(k): normalize_experience_label(v)
+        for k, v in (designer_experience or {}).items()
+    }
 
     available = df[
         df["status_norm"].isin(statuses.project_pool_set)
@@ -158,14 +206,15 @@ def suggest_assignments(
                 str(snap["Projetista"]),
             )
 
-        # Try designers from lowest coverage upward. If the lowest one cannot take
-        # any available project because of the cap, move to the next designer.
         chosen_designer_idx = None
         chosen_project = None
+        chosen_experience = "Intermediário"
         for designer_idx in sorted(eligible_indices, key=designer_key):
             snap = virtual.loc[designer_idx]
             need_posts = max(0, targets.target_posts - int(snap["_virtual_posts"]))
             need_projects = max(0, targets.target_projects - int(snap["_virtual_projects"]))
+            designer = str(snap["Projetista"])
+            exp_level = experience_map_norm.get(normalize_person_name(designer), "Intermediário")
             candidate = _pick_project(
                 remaining_projects,
                 need_posts,
@@ -175,10 +224,14 @@ def suggest_assignments(
                 max_portfolio_posts,
                 max_portfolio_projects,
                 priority_enabled,
+                experience_enabled=experience_enabled,
+                designer_experience=exp_level,
+                experience_mode=experience_mode,
             )
             if candidate is not None:
                 chosen_designer_idx = designer_idx
                 chosen_project = candidate
+                chosen_experience = exp_level
                 break
 
         if chosen_designer_idx is None or chosen_project is None:
@@ -195,8 +248,15 @@ def suggest_assignments(
         after_posts = before_posts + posts
         after_projects = before_projects + 1
         priority_value = str(chosen_project.get("priority") or "Normal").strip() or "Normal"
+        project_type_value = str(chosen_project.get("project_type") or "").strip()
+        difficulty_value = normalize_difficulty_label(chosen_project.get("_difficulty", "Médio"))
 
         reason_parts = [f"menor cobertura da equipe ({before_posts} postes / {before_projects} projetos)"]
+        if experience_enabled:
+            reason_parts.append(
+                f"perfil {chosen_experience} compatível com dificuldade {difficulty_value}"
+                + (f" do PI {project_type_value}" if project_type_value else "")
+            )
         if priority_enabled and _priority(priority_value) <= 1:
             reason_parts.append(f"prioridade {priority_value}")
         if need_posts > 0 or need_projects > 0:
@@ -208,7 +268,12 @@ def suggest_assignments(
                 "item_id": item_id,
                 "Nº da nota": chosen_project.get("note"),
                 "Nota SGO": chosen_project.get("sgo"),
+                "Postes Alterados/Novos": posts,
+                # Backward-compatible alias for workers/tests created before V13.
                 "PLN": posts,
+                "PI (Tipo Projeto)": project_type_value,
+                "Dificuldade": difficulty_value,
+                "Experiência projetista": chosen_experience,
                 "Regional": chosen_project.get("regional"),
                 "Município": chosen_project.get("municipality"),
                 "Prioridade": priority_value,
@@ -247,19 +312,22 @@ def suggest_assignments(
         covered_projects = int(snap["_virtual_projects"]) >= targets.target_projects
 
         if int(snap.get("Carteira sem PLN", 0) or 0) > 0:
-            reason = "Distribuição bloqueada: existe projeto atribuído sem PLN"
+            reason = "Distribuição bloqueada: existe projeto atribuído sem Postes Alterados/Novos"
         elif covered_posts and covered_projects:
             reason = "Carteira cobre a meta diária"
         elif suggested_projects:
             reason = "Recebeu carga, mas a fila/limite não permitiu cobertura total"
         elif int(snap["_base_potential_posts"]) >= targets.target_posts and int(snap["_base_potential_projects"]) >= targets.target_projects:
             reason = "Carteira já cobria a meta antes do ciclo"
+        elif experience_enabled and str(experience_mode or "").strip().casefold() == "estrito":
+            reason = "Sem obra compatível com o nível de experiência ou limite de carteira atingido"
         else:
             reason = "Sem obra compatível disponível ou limite de carteira atingido"
 
         designer_rows.append(
             {
                 "Projetista": designer,
+                "Experiência": experience_map_norm.get(normalize_person_name(designer), "Intermediário"),
                 "Novos projetos sugeridos": suggested_projects,
                 "Novos postes sugeridos": suggested_posts,
                 "Potencial postes após distribuição": int(snap["_virtual_posts"]),

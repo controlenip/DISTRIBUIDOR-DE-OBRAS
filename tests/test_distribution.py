@@ -62,4 +62,4 @@ def test_distribution_holds_designer_with_assigned_project_without_pln():
     }])
     suggestions, summary = suggest_assignments(projects, snapshots, Targets(), StatusConfig())
     assert suggestions.empty
-    assert summary.iloc[0]["Motivo"] == "Distribuição bloqueada: existe projeto atribuído sem PLN"
+    assert summary.iloc[0]["Motivo"] == "Distribuição bloqueada: existe projeto atribuído sem Postes Alterados/Novos"

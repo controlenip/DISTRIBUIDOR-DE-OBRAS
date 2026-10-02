@@ -15,7 +15,7 @@ Classificar obras
   - disponível
   - já atribuída
   - concluída hoje
-  - bloqueada por falta de PLN/SGO
+  - bloqueada por falta de Postes Alterados/Novos/SGO
         ↓
 Calcular por projetista
   - realizado hoje
@@ -57,7 +57,7 @@ Uma obra só pode ser distribuída automaticamente quando:
 - `Status do projeto = Em projeto`;
 - `Projetistas` está vazio;
 - `Nota SGO` está preenchida;
-- `PLN > 0`.
+- `Postes Alterados/Novos > 0`.
 
 ## Jornada
 
@@ -95,7 +95,7 @@ A escrita utiliza o `eTag` retornado pelo Lists para reduzir risco de sobrescrev
 - quantidade aplicada;
 - Nota/SGO;
 - projetista;
-- PLN;
+- Postes Alterados/Novos;
 - motivo;
 - resultado/erro.
 

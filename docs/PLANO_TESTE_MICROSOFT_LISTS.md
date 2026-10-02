@@ -9,7 +9,7 @@ Não habilitar escrita no primeiro teste.
 3. Executar `worker_lists.py` sem `--apply`.
 4. Conferir quantidade total de registros.
 5. Conferir quantas obras estão `Em projeto`.
-6. Conferir obras sem projetista, PLN e Nota SGO.
+6. Conferir obras sem projetista, Postes Alterados/Novos e Nota SGO.
 7. Comparar pelo menos 10 itens entre Streamlit/worker e Microsoft Lists.
 
 ## Fase 2 - dry-run de distribuição
@@ -18,7 +18,7 @@ Não habilitar escrita no primeiro teste.
 2. Conferir carteira atual de cada um.
 3. Conferir as atribuições sugeridas sem gravação.
 4. Confirmar que nenhuma obra já atribuída aparece na sugestão.
-5. Confirmar que obras sem PLN ou SGO ficam bloqueadas.
+5. Confirmar que obras sem Postes Alterados/Novos ou SGO ficam bloqueadas.
 
 ## Fase 3 - escrita controlada de homologação
 

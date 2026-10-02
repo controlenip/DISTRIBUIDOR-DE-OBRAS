@@ -1,30 +1,40 @@
-# NIP Smart Distribuição — V12
+# NIP Smart Distribuição — V13
 
 Aplicação em **Python + Streamlit** para distribuição equilibrada de obras entre projetistas e acompanhamento de produtividade diária, semanal e mensal.
 
-## O que mudou na V12
+## O que mudou na V13
 
-A V12 transforma o fluxo em uma operação mais segura e visual:
+Além dos recursos da V12, a V13 acrescenta dois pontos principais:
 
-- **Simulação obrigatória antes de gerar a planilha**;
-- possibilidade de **incluir/excluir uma obra** e ajustar o projetista na simulação;
-- **teto de carteira configurável** para evitar sobrecarga;
-- fila com **Prioridade e Prazo**;
-- obras já atribuídas nunca são redistribuídas automaticamente;
-- motivo da atribuição e carga **antes/depois** registrados;
-- indicador de **equilíbrio da carteira**;
-- validação de SGO/PLN e detecção de SGO/nota duplicados;
-- **auditoria** dos ciclos de simulação e exportação;
-- perfil **Administrador / Consulta**, com PIN opcional via Secrets;
-- metas e limites configuráveis na interface;
-- histórico individual dos últimos 20 dias úteis;
-- consistência diária de meta;
-- projeção mensal;
-- fechamento diário para download em Excel;
-- sinal opcional de **reanálise registrada** quando a coluna existir na BASE;
-- Microsoft Lists com leitura, escrita protegida e opção de sincronização periódica;
-- notificação opcional via webhook/Power Automate;
-- botões com maior contraste: ações principais em laranja/azul, download em verde e **Limpar dados em vermelho**.
+- o nome **PLN** deixa de aparecer para o usuário e passa a ser exibido como **Postes Alterados/Novos**;
+- a coluna **F — PI (Tipo Projeto)** pode ser usada para distribuir projetos conforme a experiência do projetista.
+
+### Distribuição por experiência
+
+A ferramenta permite classificar cada projetista como:
+
+- **Menos experiente**;
+- **Intermediário**;
+- **Experiente**.
+
+E cada valor de `PI (Tipo Projeto)` pode ser classificado como:
+
+- **Fácil**;
+- **Médio**;
+- **Difícil**.
+
+Há dois modos:
+
+- **Preferencial**: prioriza o melhor encaixe, mas pode usar outra combinação como fallback se necessário;
+- **Estrito**: impede que um projetista receba um projeto classificado acima do seu nível de experiência.
+
+Exemplo de comportamento:
+
+- projetista menos experiente → preferência por projeto Fácil;
+- projetista intermediário → preferência por projeto Médio;
+- projetista experiente → preferência por projeto Difícil.
+
+A distribuição continua considerando também equilíbrio de carteira, meta diária, teto de carga, prioridade e prazo.
 
 ## Regra principal
 
@@ -39,23 +49,31 @@ A carteira ativa considera obras com:
 
 - `Status do projeto = Em projeto`;
 - campo `Projetistas` preenchido;
-- peso da obra = `PLN`.
+- peso da obra = **Postes Alterados/Novos**, lido da coluna R (`P L N`) da BASE LIST.
 
 Uma obra pode entrar na distribuição automática quando:
 
 - Status = `Em projeto`;
 - Projetistas está vazio;
 - Nota SGO está preenchida;
-- PLN é maior que zero.
+- Postes Alterados/Novos é maior que zero.
 
 ## Fluxo recomendado
 
 1. Carregue `BASE_LIST.xlsx` e `PROJETISTAS.xlsx`.
-2. Clique em **SIMULAR DISTRIBUIÇÃO**.
-3. Confira/ajuste a simulação.
-4. Clique em **GERAR NOVA BASE LIST DISTRIBUÍDA**.
-5. Baixe o arquivo gerado.
-6. Use **LIMPAR DADOS** antes de começar um novo ciclo com outras bases.
+2. Acesse **Distribuir obras**.
+3. Se quiser, ative **Usar experiência do projetista na distribuição**.
+4. Defina o nível dos projetistas e a dificuldade de cada `PI (Tipo Projeto)`.
+5. Clique em **GERAR / ATUALIZAR SIMULAÇÃO**.
+6. Confira/ajuste a simulação.
+7. Gere e baixe a nova BASE LIST distribuída.
+8. Use **LIMPAR DADOS** antes de iniciar outro ciclo.
+
+## PROJETISTAS.xlsx
+
+A planilha continua funcionando apenas com `Nome` e `E-mail`.
+
+Opcionalmente, pode conter uma coluna como `Experiência`, `Nível` ou `Senioridade`. Quando existir, a ferramenta usa esse valor como ponto inicial. Se não existir, todos começam como **Intermediário** e podem ser ajustados na tela.
 
 ## Arquivo principal no Streamlit
 
@@ -71,13 +89,6 @@ Todo o conteúdo deste repositório deve permanecer no GitHub. O usuário final 
 
 Nunca coloque credenciais reais no GitHub. Use **Streamlit Secrets**.
 
-O arquivo `.streamlit/secrets.toml.example` mostra os campos aceitos, incluindo:
-
-- credenciais do Microsoft Graph;
-- PIN opcional de administrador;
-- parâmetros padrão;
-- webhook opcional para notificações.
-
 ## Testes
 
 Execute:
@@ -86,4 +97,4 @@ Execute:
 pytest -q
 ```
 
-A V12 inclui testes para distribuição, teto de carteira, prioridade, histórico individual, Excel e regras de jornada.
+A V13 inclui testes de distribuição por experiência, modo Estrito, Postes Alterados/Novos, teto de carteira, prioridade, Excel e regras de jornada.

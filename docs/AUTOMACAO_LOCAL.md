@@ -8,10 +8,10 @@ Esta versão permite validar o motor automático sem gravar no ambiente corporat
 - A meta cheia diária é 30 postes e 5 projetos.
 - Faixa mínima: 25 postes e 4 projetos.
 - A meta é diária e não cumulativa.
-- Obra elegível: `Status do projeto = Em projeto`, `Projetistas` vazio, `Nota SGO` preenchida e `PLN > 0`.
+- Obra elegível: `Status do projeto = Em projeto`, `Projetistas` vazio, `Nota SGO` preenchida e `Postes Alterados/Novos > 0`.
 - Obra já atribuída nunca entra novamente na fila disponível.
-- PLN é usado para planejar a carga.
-- Produção concluída usa `Qtd. de poste` quando disponível e PLN como fallback.
+- Postes Alterados/Novos é usado para planejar a carga.
+- Produção concluída usa `Qtd. de poste` quando disponível e Postes Alterados/Novos como fallback.
 - No intervalo e fora do expediente o worker não distribui, salvo execução de teste com `--force-time`.
 
 ## Simular um ciclo

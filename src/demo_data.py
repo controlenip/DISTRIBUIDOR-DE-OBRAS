@@ -15,6 +15,7 @@ def sample_designers_df() -> pd.DataFrame:
         "name": sample_designers(),
         "email": ["a@empresa.com", "b@empresa.com", "c@empresa.com", "d@empresa.com"],
         "sharepoint_lookup_id": [None, None, None, None],
+        "experience": ["Menos experiente", "Intermediário", "Experiente", "Experiente"],
     })
 
 
@@ -24,7 +25,7 @@ def sample_projects(timezone: str = "America/Fortaleza") -> pd.DataFrame:
     yesterday = today - timedelta(days=1)
 
     rows = [
-        # item_id, note, sgo, municipality, regional, PLN, assignee, status, priority, deadline, completed_at
+        # item_id, note, sgo, municipality, regional, Postes Alterados/Novos, assignee, status, priority, deadline, completed_at
         ("1", "111000001", "430100001", "São Luís", "Norte", 8, "Projetista A", "Concluído", "Normal", None, today),
         ("2", "111000002", "430100002", "São Luís", "Norte", 7, "Projetista A", "Concluído", "Normal", None, today),
         ("3", "111000003", "430100003", "Bacabal", "Centro", 9, "Projetista B", "Concluído", "Alta", None, today),
@@ -54,6 +55,7 @@ def sample_projects(timezone: str = "America/Fortaleza") -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=[
         "item_id", "note", "sgo", "municipality", "regional", "posts", "assignee", "status", "priority", "deadline", "completed_at"
     ])
+    df["project_type"] = ["UNI" if int(v) <= 4 else "UNR" if int(v) <= 7 else "MTP" for v in df["posts"]]
     df["posts_valid"] = df["posts"].notna() & (df["posts"] > 0)
     df["actual_posts"] = None
     df["assigned_at"] = None

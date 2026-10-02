@@ -75,7 +75,7 @@ def _add_distribution_summary_sheet(
     ws["A1"] = "DISTRIBUIÇÃO AUTOMÁTICA DE OBRAS"
     ws["A1"].font = Font(bold=True, size=14, color="FFFFFF")
     ws["A1"].fill = PatternFill("solid", fgColor="1F4E78")
-    ws.merge_cells("A1:L1")
+    ws.merge_cells("A1:O1")
     ws["A2"] = "Gerado em"
     ws["B2"] = generated_at.strftime("%d/%m/%Y %H:%M:%S")
     ws["A3"] = "Meta diária"
@@ -85,7 +85,8 @@ def _add_distribution_summary_sheet(
 
     start_row = 6
     headers = [
-        "Projetista", "Nº da nota", "Nota SGO", "PLN", "Prioridade", "Regional", "Município", "Prazo",
+        "Projetista", "Nº da nota", "Nota SGO", "PI (Tipo Projeto)", "Dificuldade",
+        "Experiência projetista", "Postes Alterados/Novos", "Prioridade", "Regional", "Município", "Prazo",
         "Carga antes", "Carga depois", "Projetos antes/depois", "Motivo"
     ]
     for col, header in enumerate(headers, start=1):
@@ -99,7 +100,10 @@ def _add_distribution_summary_sheet(
             row.get("Projetista"),
             row.get("Nº da nota"),
             row.get("Nota SGO"),
-            row.get("PLN"),
+            row.get("PI (Tipo Projeto)"),
+            row.get("Dificuldade"),
+            row.get("Experiência projetista"),
+            row.get("Postes Alterados/Novos", row.get("PLN")),
             row.get("Prioridade"),
             row.get("Regional"),
             row.get("Município"),
@@ -138,8 +142,8 @@ def _add_distribution_summary_sheet(
                 ws.cell(r_idx, c_idx, row.get(col_name))
 
     widths = {
-        "A": 28, "B": 18, "C": 18, "D": 10, "E": 14, "F": 18, "G": 22, "H": 18,
-        "I": 16, "J": 16, "K": 20, "L": 70
+        "A": 28, "B": 18, "C": 18, "D": 18, "E": 14, "F": 22, "G": 22, "H": 14,
+        "I": 18, "J": 22, "K": 18, "L": 16, "M": 16, "N": 20, "O": 70
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width

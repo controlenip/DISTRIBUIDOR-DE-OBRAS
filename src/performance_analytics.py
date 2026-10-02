@@ -64,7 +64,7 @@ def designer_attention_table(snapshot: pd.DataFrame, target_posts: int, target_p
         "Falta de carga": "🟠 Falta de carga",
         "Risco produtivo": "🔴 Risco produtivo",
         "Encerrado abaixo da meta": "🔴 Abaixo da meta",
-        "PLN pendente na carteira": "🟡 PLN pendente",
+        "PLN pendente na carteira": "🟡 Postes Alterados/Novos pendentes",
     }
 
     view = df.loc[mask].copy()
@@ -135,7 +135,7 @@ def management_insights(
             )
 
     insights.append(
-        f"A fila elegível possui {available_projects} obra(s), somando {available_posts} postes de PLN disponíveis para distribuição."
+        f"A fila elegível possui {available_projects} obra(s), somando {available_posts} postes Alterados/Novos disponíveis para distribuição."
     )
 
     if not designer_prediction.empty:
@@ -159,7 +159,7 @@ def designer_monthly_prediction_advanced(
     """Month-end forecast for project designers using recent business-day pace.
 
     Completed production is anchored to ``Data de entrega do projeto``. Post
-    production uses ``Qtd. de poste`` when available and PLN as fallback. Daily
+    production uses ``Qtd. de poste`` when available and Postes Alterados/Novos as fallback. Daily
     surplus is analytical only and never lowers the following day's target.
     """
     df = prepare_projects(projects, timezone)

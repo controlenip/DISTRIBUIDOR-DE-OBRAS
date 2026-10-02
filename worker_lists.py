@@ -119,7 +119,7 @@ def run_once(args: argparse.Namespace) -> int:
 
     print(f"[{now.strftime('%d/%m/%Y %H:%M:%S')}] {result.status.upper()} - {result.message}")
     if not result.suggestions.empty:
-        cols = [c for c in ["Projetista", "Nº da nota", "Nota SGO", "PLN", "Regional", "Município"] if c in result.suggestions.columns]
+        cols = [c for c in ["Projetista", "Nº da nota", "Nota SGO", "PI (Tipo Projeto)", "Postes Alterados/Novos", "Regional", "Município"] if c in result.suggestions.columns]
         print(result.suggestions[cols].to_string(index=False))
 
     if args.apply and result.assignments_applied:

@@ -39,7 +39,7 @@ Para distribuição automática, ainda são obrigatórios:
 
 ```text
 Nota SGO preenchida
-PLN > 0
+Postes Alterados/Novos > 0
 ```
 
 Ao atribuir uma obra, a aplicação **não altera o Status do projeto**. Ela preenche somente o projetista responsável. O status continua `Em projeto` até o processo operacional alterar a obra.

@@ -78,7 +78,7 @@ def run_once(args: argparse.Namespace) -> int:
         print(result.distribution_summary[cols].to_string(index=False))
     if not result.suggestions.empty:
         print("\nAtribuições:")
-        cols = [c for c in ["Projetista", "Nº da nota", "Nota SGO", "PLN", "Regional", "Município"] if c in result.suggestions.columns]
+        cols = [c for c in ["Projetista", "Nº da nota", "Nota SGO", "PI (Tipo Projeto)", "Postes Alterados/Novos", "Regional", "Município"] if c in result.suggestions.columns]
         print(result.suggestions[cols].to_string(index=False))
     if result.errors:
         print("\nErros:")

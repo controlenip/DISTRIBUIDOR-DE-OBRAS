@@ -15,6 +15,7 @@ class FieldMap:
     note: str = "N° da nota"
     sgo: str = "Nota SGO"
     status: str = "Status do projeto"
+    project_type: str = "PI (Tipo Projeto)"
     regional: str = "Regional"
     municipality: str = "Município"
     deadline: str = "Prazo"
@@ -33,6 +34,7 @@ class ResolvedFieldMap:
     note: str
     sgo: str
     status: str
+    project_type: str | None
     regional: str
     municipality: str
     deadline: str
@@ -45,7 +47,7 @@ class ResolvedFieldMap:
 
     def graph_fields(self) -> list[str]:
         values = [
-            self.note, self.sgo, self.status, self.regional, self.municipality,
+            self.note, self.sgo, self.status, self.project_type, self.regional, self.municipality,
             self.deadline, self.posts, self.assignee, self.completed_at,
             self.actual_posts, self.priority,
         ]
@@ -100,6 +102,7 @@ class ListsProjectRepository:
             "note": resolve(self.fields.note),
             "sgo": resolve(self.fields.sgo),
             "status": resolve(self.fields.status),
+            "project_type": resolve(self.fields.project_type, required=False),
             "regional": resolve(self.fields.regional),
             "municipality": resolve(self.fields.municipality),
             "deadline": resolve(self.fields.deadline),
@@ -121,6 +124,7 @@ class ListsProjectRepository:
             note=internal("note") or "",
             sgo=internal("sgo") or "",
             status=internal("status") or "",
+            project_type=internal("project_type"),
             regional=internal("regional") or "",
             municipality=internal("municipality") or "",
             deadline=internal("deadline") or "",
@@ -166,6 +170,7 @@ class ListsProjectRepository:
                     "note": self._value(values, f.note),
                     "sgo": self._value(values, f.sgo),
                     "status": self._value(values, f.status),
+                    "project_type": self._value(values, f.project_type),
                     "regional": self._value(values, f.regional),
                     "municipality": self._value(values, f.municipality),
                     "deadline": self._value(values, f.deadline),

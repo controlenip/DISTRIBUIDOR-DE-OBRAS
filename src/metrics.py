@@ -29,7 +29,7 @@ def _safe_datetime(series: pd.Series, timezone: str) -> pd.Series:
 def prepare_projects(projects: pd.DataFrame, timezone: str) -> pd.DataFrame:
     df = projects.copy()
     expected = [
-        "item_id", "note", "sgo", "municipality", "regional", "posts", "posts_valid",
+        "item_id", "note", "sgo", "municipality", "regional", "project_type", "posts", "posts_valid",
         "assignee", "status", "priority", "deadline", "complexity", "assigned_at",
         "completed_at", "actual_posts", "reanalyzed_at", "modified_at", "etag", "assignee_lookup_id"
     ]
@@ -47,11 +47,14 @@ def prepare_projects(projects: pd.DataFrame, timezone: str) -> pd.DataFrame:
     raw_actual = pd.to_numeric(df["actual_posts"], errors="coerce")
     df["actual_posts_valid"] = raw_actual.notna() & (raw_actual >= 0)
     df["actual_posts_numeric"] = raw_actual.fillna(0).astype(int)
-    # Planejamento/carteira usa PLN. Produção concluída usa a quantidade final
-    # quando existir; se não existir, usa PLN como fallback.
+    # Planejamento/carteira usa Postes Alterados/Novos (coluna R). Produção concluída usa
+    # a quantidade final quando existir; se não existir, usa a coluna R como fallback.
     df["production_posts_valid"] = df["actual_posts_valid"] | df["posts_valid"]
     df["production_posts"] = df["actual_posts_numeric"].where(df["actual_posts_valid"], df["posts"])
 
+
+    df["project_type"] = df["project_type"].fillna("").astype(str).str.strip()
+    df["project_type_norm"] = df["project_type"].map(normalize_text)
 
     df["assignee"] = df["assignee"].fillna("").astype(str).str.strip()
     df["assignee_norm"] = df["assignee"].map(normalize_person_name)

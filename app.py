@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from io import BytesIO
 import hashlib
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -15,6 +16,14 @@ from src.demo_data import sample_designers_df, sample_projects
 from src.distribution_engine import suggest_assignments
 from src.excel_loader import load_base_excel, load_designers_excel
 from src.excel_writer import generate_distributed_excel_bytes
+from src.experience_rules import (
+    DIFFICULTY_LEVELS,
+    EXPERIENCE_LEVELS,
+    EXPERIENCE_MODES,
+    match_penalty,
+    normalize_difficulty_label,
+    normalize_experience_label,
+)
 from src.graph_client import GraphClient, GraphError
 from src.lists_repository import FieldMap, ListsProjectRepository
 from src.metrics import (
@@ -26,7 +35,7 @@ from src.metrics import (
     weekly_metrics,
 )
 from src.models import StatusConfig, Targets
-from src.name_utils import normalize_person_name
+from src.name_utils import normalize_person_name, normalize_text
 from src.notifications import send_distribution_webhook
 from src.performance_analytics import (
     daily_close_summary,
@@ -44,6 +53,9 @@ from src.work_schedule import (
     format_minutes,
     productive_minutes_remaining,
 )
+
+POSTS_LABEL = "Postes Alterados/Novos"
+PROJECT_TYPE_LABEL = "PI (Tipo Projeto)"
 
 
 # -----------------------------------------------------------------------------
@@ -180,7 +192,7 @@ def status_badge(status: str) -> str:
         "Falta de carga": "🟠 Precisa de mais obras",
         "Risco produtivo": "🔴 Risco de não atingir",
         "Encerrado abaixo da meta": "🔴 Fechou abaixo da meta",
-        "PLN pendente na carteira": "🟡 Revisar PLN",
+        "PLN pendente na carteira": "🟡 Revisar Postes Alterados/Novos",
     }
     return mapping.get(status, status)
 
@@ -197,7 +209,7 @@ def compact_load_table(baseline: pd.DataFrame, target_posts: int, target_project
 
     def friendly_status(row) -> str:
         if row["Projetos sem PLN"] > 0:
-            return "🟡 Revisar PLN"
+            return "🟡 Revisar Postes Alterados/Novos"
         if row["Projetos já atribuídos"] <= 0:
             return "🔴 Sem obras"
         if row["Meta restante postes"] <= 0 and row["Meta restante projetos"] <= 0:
@@ -297,6 +309,8 @@ BASE_DEFAULTS = {
     "max_portfolio_posts": int(nested(SECRETS, "app", "max_portfolio_posts", default=36)),
     "max_portfolio_projects": int(nested(SECRETS, "app", "max_portfolio_projects", default=6)),
     "priority_enabled": bool(nested(SECRETS, "app", "priority_enabled", default=True)),
+    "experience_enabled": bool(nested(SECRETS, "app", "experience_enabled", default=False)),
+    "experience_mode": str(nested(SECRETS, "app", "experience_mode", default="Preferencial") or "Preferencial"),
 }
 
 SESSION_DEFAULTS = {
@@ -330,6 +344,11 @@ SESSION_DEFAULTS = {
     "cfg_max_portfolio_posts": BASE_DEFAULTS["max_portfolio_posts"],
     "cfg_max_portfolio_projects": BASE_DEFAULTS["max_portfolio_projects"],
     "cfg_priority_enabled": BASE_DEFAULTS["priority_enabled"],
+    "cfg_experience_enabled": BASE_DEFAULTS["experience_enabled"],
+    "cfg_experience_mode": BASE_DEFAULTS["experience_mode"],
+    "designer_experience_profile": pd.DataFrame(),
+    "project_difficulty_profile": pd.DataFrame(),
+    "experience_profile_source_signature": "",
 }
 for key, default in SESSION_DEFAULTS.items():
     if key not in st.session_state:
@@ -347,6 +366,14 @@ def clear_working_data():
     st.session_state.base_excel_name = ""
     st.session_state.base_excel_signature = ""
     st.session_state.designers_signature = ""
+    st.session_state.designer_experience_profile = pd.DataFrame()
+    st.session_state.project_difficulty_profile = pd.DataFrame()
+    st.session_state.experience_profile_source_signature = ""
+    for widget_key in [
+        "designer_experience_editor_v13", "project_difficulty_editor_v13",
+        "distribution_editor_v13", "experience_toggle_page_v13",
+    ]:
+        st.session_state.pop(widget_key, None)
     reset_simulation()
     st.session_state.pop("last_auto_result", None)
     st.session_state.uploader_epoch = int(st.session_state.get("uploader_epoch", 0)) + 1
@@ -370,6 +397,7 @@ FIELD_MAP = FieldMap(
     note=nested(SECRETS, "lists", "fields", "note", default="N° da nota"),
     sgo=nested(SECRETS, "lists", "fields", "sgo", default="Nota SGO"),
     status=nested(SECRETS, "lists", "fields", "status", default="Status do projeto"),
+    project_type=nested(SECRETS, "lists", "fields", "project_type", default="PI (Tipo Projeto)"),
     regional=nested(SECRETS, "lists", "fields", "regional", default="Regional"),
     municipality=nested(SECRETS, "lists", "fields", "municipality", default="Município"),
     deadline=nested(SECRETS, "lists", "fields", "deadline", default="Prazo"),
@@ -464,6 +492,8 @@ TARGETS = Targets(
 MAX_PORTFOLIO_POSTS = int(st.session_state.cfg_max_portfolio_posts)
 MAX_PORTFOLIO_PROJECTS = int(st.session_state.cfg_max_portfolio_projects)
 PRIORITY_ENABLED = bool(st.session_state.cfg_priority_enabled)
+EXPERIENCE_ENABLED = bool(st.session_state.cfg_experience_enabled)
+EXPERIENCE_MODE = str(st.session_state.cfg_experience_mode or "Preferencial")
 
 st.sidebar.divider()
 st.sidebar.caption(
@@ -510,7 +540,7 @@ def render_excel_uploads():
     left, right = st.columns(2)
     with left:
         base_upload = st.file_uploader(
-            "BASE LIST (.xlsx)", type=["xlsx"], key=f"base_list_v12_{st.session_state.uploader_epoch}",
+            "BASE LIST (.xlsx)", type=["xlsx"], key=f"base_list_v13_{st.session_state.uploader_epoch}",
             help="Arquivo exportado do Microsoft Lists com as obras.",
         )
         if base_upload is not None:
@@ -519,6 +549,9 @@ def render_excel_uploads():
                 sig = hashlib.sha256(base_bytes).hexdigest()
                 if sig != st.session_state.base_excel_signature:
                     reset_simulation()
+                    st.session_state.experience_profile_source_signature = ""
+                    st.session_state.pop("project_difficulty_editor_v13", None)
+                    st.session_state.pop("distribution_editor_v13", None)
                 st.session_state.base_excel_bytes = base_bytes
                 st.session_state.base_excel_name = base_upload.name
                 st.session_state.base_excel_signature = sig
@@ -528,7 +561,7 @@ def render_excel_uploads():
                 st.error(f"Não foi possível ler a BASE LIST: {exc}")
     with right:
         designer_upload = st.file_uploader(
-            "PROJETISTAS (.xlsx)", type=["xlsx"], key=f"designers_v12_{st.session_state.uploader_epoch}",
+            "PROJETISTAS (.xlsx)", type=["xlsx"], key=f"designers_v13_{st.session_state.uploader_epoch}",
             help="Lista oficial de projetistas que podem receber novas obras.",
         )
         if designer_upload is not None:
@@ -537,6 +570,9 @@ def render_excel_uploads():
                 sig = hashlib.sha256(designer_bytes).hexdigest()
                 if sig != st.session_state.designers_signature:
                     reset_simulation()
+                    st.session_state.experience_profile_source_signature = ""
+                    st.session_state.pop("designer_experience_editor_v13", None)
+                    st.session_state.pop("distribution_editor_v13", None)
                 st.session_state.designers_signature = sig
                 st.session_state.uploaded_designers = load_designers_excel(designer_upload)
                 st.success(f"✅ Lista pronta — {len(st.session_state.uploaded_designers)} projetistas")
@@ -549,14 +585,24 @@ def sync_lists_now():
     st.session_state.graph_projects = repo.fetch_projects()
     st.session_state.column_diagnostics = repo.column_diagnostics()
     st.session_state.last_sync = datetime.now(ZoneInfo(TIMEZONE))
+    st.session_state.experience_profile_source_signature = ""
+    st.session_state.pop("project_difficulty_editor_v13", None)
+    reset_simulation()
 
 
 def render_lists_input():
     st.markdown('<div class="section-title">Conexão com Microsoft Lists</div>', unsafe_allow_html=True)
-    designer_upload = st.file_uploader("PROJETISTAS.xlsx", type=["xlsx"], key=f"designers_lists_v12_{st.session_state.uploader_epoch}")
+    designer_upload = st.file_uploader("PROJETISTAS.xlsx", type=["xlsx"], key=f"designers_lists_v13_{st.session_state.uploader_epoch}")
     if designer_upload is not None:
         try:
-            st.session_state.uploaded_designers = load_designers_excel(designer_upload)
+            designer_bytes = designer_upload.getvalue()
+            sig = hashlib.sha256(designer_bytes).hexdigest()
+            if sig != st.session_state.designers_signature:
+                reset_simulation()
+                st.session_state.experience_profile_source_signature = ""
+                st.session_state.pop("designer_experience_editor_v13", None)
+                st.session_state.designers_signature = sig
+            st.session_state.uploaded_designers = load_designers_excel(BytesIO(designer_bytes))
             st.success(f"✅ {len(st.session_state.uploaded_designers)} projetistas carregados")
         except Exception as exc:
             st.error(f"Falha ao ler PROJETISTAS.xlsx: {exc}")
@@ -614,6 +660,84 @@ if not source_ready:
     st.stop()
 
 
+def sync_experience_profiles() -> None:
+    designer_names = [str(v).strip() for v in designers_df.get("name", pd.Series(dtype=str)).tolist() if str(v).strip()]
+    raw_types = projects.get("project_type", pd.Series(dtype=str)).fillna("").astype(str).str.strip()
+    type_display_by_norm: dict[str, str] = {}
+    for value in raw_types.tolist():
+        norm = normalize_text(value)
+        if norm and norm not in type_display_by_norm:
+            type_display_by_norm[norm] = value
+    project_types = sorted(type_display_by_norm.values(), key=normalize_text)
+    signature_raw = "|".join(sorted(designer_names)) + "||" + "|".join(project_types)
+    signature = hashlib.sha256(signature_raw.encode()).hexdigest()
+    if signature == st.session_state.experience_profile_source_signature:
+        return
+
+    previous_designers = {}
+    if isinstance(st.session_state.designer_experience_profile, pd.DataFrame) and not st.session_state.designer_experience_profile.empty:
+        previous_designers = {
+            normalize_person_name(r["Projetista"]): normalize_experience_label(r["Experiência"])
+            for _, r in st.session_state.designer_experience_profile.iterrows()
+        }
+    input_experience = {}
+    if "experience" in designers_df.columns:
+        input_experience = {
+            normalize_person_name(r["name"]): normalize_experience_label(r.get("experience"))
+            for _, r in designers_df.iterrows()
+        }
+    designer_rows = []
+    for name in designer_names:
+        norm = normalize_person_name(name)
+        exp = previous_designers.get(norm, input_experience.get(norm, "Intermediário"))
+        designer_rows.append({"Projetista": name, "Experiência": normalize_experience_label(exp)})
+    st.session_state.designer_experience_profile = pd.DataFrame(designer_rows)
+
+    previous_types = {}
+    if isinstance(st.session_state.project_difficulty_profile, pd.DataFrame) and not st.session_state.project_difficulty_profile.empty:
+        previous_types = {
+            normalize_text(r[PROJECT_TYPE_LABEL]): normalize_difficulty_label(r["Dificuldade"])
+            for _, r in st.session_state.project_difficulty_profile.iterrows()
+        }
+    type_rows = [
+        {PROJECT_TYPE_LABEL: value, "Dificuldade": previous_types.get(normalize_text(value), "Médio")}
+        for value in project_types
+    ]
+    st.session_state.project_difficulty_profile = pd.DataFrame(type_rows)
+    st.session_state.experience_profile_source_signature = signature
+
+
+def designer_experience_map() -> dict[str, str]:
+    df = st.session_state.designer_experience_profile
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return {}
+    return {str(r["Projetista"]): normalize_experience_label(r["Experiência"]) for _, r in df.iterrows()}
+
+
+def project_difficulty_map() -> dict[str, str]:
+    df = st.session_state.project_difficulty_profile
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return {}
+    return {str(r[PROJECT_TYPE_LABEL]): normalize_difficulty_label(r["Dificuldade"]) for _, r in df.iterrows()}
+
+
+def difficulty_for_project_type(value: object) -> str:
+    mapping = {normalize_text(k): v for k, v in project_difficulty_map().items()}
+    return mapping.get(normalize_text(value), "Médio")
+
+
+def experience_profiles_hash() -> str:
+    d = st.session_state.designer_experience_profile
+    p = st.session_state.project_difficulty_profile
+    d_text = d.to_csv(index=False) if isinstance(d, pd.DataFrame) else ""
+    p_text = p.to_csv(index=False) if isinstance(p, pd.DataFrame) else ""
+    raw = f"{EXPERIENCE_ENABLED}|{EXPERIENCE_MODE}|{d_text}|{p_text}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+sync_experience_profiles()
+
+
 # -----------------------------------------------------------------------------
 # COMMON ANALYTICS
 # -----------------------------------------------------------------------------
@@ -653,6 +777,7 @@ def current_simulation_signature() -> str:
         st.session_state.designers_signature or str(len(DESIGNERS)),
         str(TARGETS.target_posts), str(TARGETS.target_projects),
         str(MAX_PORTFOLIO_POSTS), str(MAX_PORTFOLIO_PROJECTS), str(PRIORITY_ENABLED),
+        experience_profiles_hash(),
     ])
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -665,6 +790,10 @@ def compute_distribution():
         max_portfolio_projects=MAX_PORTFOLIO_PROJECTS,
         priority_enabled=PRIORITY_ENABLED,
         respect_time=False,
+        experience_enabled=EXPERIENCE_ENABLED,
+        designer_experience=designer_experience_map(),
+        project_difficulty=project_difficulty_map(),
+        experience_mode=EXPERIENCE_MODE,
     )
 
 
@@ -682,7 +811,7 @@ def recalculate_manual_simulation(df: pd.DataFrame) -> pd.DataFrame:
     running_projects = {name: int(base_projects.get(name, 0)) for name in DESIGNERS}
     for idx, row in result.iterrows():
         designer = str(row.get("Projetista", ""))
-        posts = int(pd.to_numeric(pd.Series([row.get("PLN", 0)]), errors="coerce").fillna(0).iloc[0])
+        posts = int(pd.to_numeric(pd.Series([row.get(POSTS_LABEL, row.get("PLN", 0))]), errors="coerce").fillna(0).iloc[0])
         before_posts = running_posts.get(designer, 0)
         before_projects = running_projects.get(designer, 0)
         after_posts = before_posts + posts
@@ -691,6 +820,11 @@ def recalculate_manual_simulation(df: pd.DataFrame) -> pd.DataFrame:
         result.at[idx, "Carga antes (projetos)"] = before_projects
         result.at[idx, "Carga depois (postes)"] = after_posts
         result.at[idx, "Carga depois (projetos)"] = after_projects
+        if EXPERIENCE_ENABLED:
+            exp_map = designer_experience_map()
+            result.at[idx, "Experiência projetista"] = exp_map.get(designer, "Intermediário")
+            project_type = str(row.get(PROJECT_TYPE_LABEL, "") or "").strip()
+            result.at[idx, "Dificuldade"] = difficulty_for_project_type(project_type)
         if original_map.get(str(row.get("item_id", ""))) != designer:
             result.at[idx, "Motivo"] = "Ajuste manual do coordenador após a simulação automática"
         running_posts[designer] = after_posts
@@ -713,12 +847,25 @@ def validate_manual_simulation(df: pd.DataFrame) -> list[str]:
     base_posts = baseline.set_index("Projetista")["PLN já atribuído"].to_dict()
     base_projects = baseline.set_index("Projetista")["Projetos já atribuídos"].to_dict()
     for designer, group in df.groupby("Projetista"):
-        total_posts = int(base_posts.get(designer, 0)) + int(pd.to_numeric(group["PLN"], errors="coerce").fillna(0).sum())
+        posts_col = POSTS_LABEL if POSTS_LABEL in group.columns else "PLN"
+        total_posts = int(base_posts.get(designer, 0)) + int(pd.to_numeric(group[posts_col], errors="coerce").fillna(0).sum())
         total_projects = int(base_projects.get(designer, 0)) + len(group)
         if total_posts > MAX_PORTFOLIO_POSTS or total_projects > MAX_PORTFOLIO_PROJECTS:
             errors.append(
                 f"{designer}: a edição ultrapassa o teto de {MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos."
             )
+
+    if EXPERIENCE_ENABLED and str(EXPERIENCE_MODE).casefold() == "estrito":
+        exp_map = designer_experience_map()
+        for _, row in df.iterrows():
+            designer = str(row.get("Projetista", ""))
+            project_type = str(row.get(PROJECT_TYPE_LABEL, "") or "").strip()
+            experience = exp_map.get(designer, "Intermediário")
+            difficulty = difficulty_for_project_type(project_type)
+            if match_penalty(experience, difficulty, "Estrito") is None:
+                errors.append(
+                    f"{designer}: o PI '{project_type or 'sem tipo'}' está classificado como {difficulty} e excede o nível {experience}."
+                )
     return errors
 
 
@@ -842,9 +989,11 @@ if PAGE == "🏠 Início":
     )
 
     if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality.get("sgo_duplicado", 0):
-        st.warning("Há pendências de dados na BASE LIST. A ferramenta bloqueia automaticamente obras sem SGO/PLN da distribuição.")
+        st.warning("Há pendências de dados na BASE LIST. A ferramenta bloqueia automaticamente obras sem SGO ou Postes Alterados/Novos da distribuição.")
 
     st.markdown('<div class="section-title">Passo 2 — Simule antes de distribuir</div>', unsafe_allow_html=True)
+    if EXPERIENCE_ENABLED:
+        st.info(f"Critério por experiência está ativo no modo **{EXPERIENCE_MODE}**. Antes da simulação, confira os níveis e as dificuldades na página **Distribuir obras**.")
     a1, a2, a3, a4 = st.columns(4)
     a1.metric("Obras disponíveis", len(eligible_available))
     a2.metric("Postes disponíveis", available_posts)
@@ -879,8 +1028,8 @@ if PAGE == "🏠 Início":
 
     left, right = st.columns([1.45, 1])
     with left:
-        chart = baseline[["Projetista", "PLN já atribuído", "Projetos já atribuídos"]].copy().sort_values("PLN já atribuído")
-        fig = px.bar(chart, y="Projetista", x="PLN já atribuído", orientation="h", hover_data=["Projetos já atribuídos"], title="Carga atual em postes por projetista")
+        chart = baseline[["Projetista", "PLN já atribuído", "Projetos já atribuídos"]].copy().rename(columns={"PLN já atribuído": POSTS_LABEL}).sort_values(POSTS_LABEL)
+        fig = px.bar(chart, y="Projetista", x=POSTS_LABEL, orientation="h", hover_data=["Projetos já atribuídos"], title="Carga atual em postes por projetista")
         fig.add_vline(x=TARGETS.target_posts, line_dash="dash", annotation_text=f"Meta {TARGETS.target_posts}")
         fig.add_vline(x=MAX_PORTFOLIO_POSTS, line_dash="dot", annotation_text=f"Teto {MAX_PORTFOLIO_POSTS}")
         st.plotly_chart(style_figure(fig, max(380, 27 * len(chart))), use_container_width=True)
@@ -894,7 +1043,104 @@ if PAGE == "🏠 Início":
 # PAGE: DISTRIBUTION
 # -----------------------------------------------------------------------------
 elif PAGE == "⚡ Distribuir obras":
-    st.markdown('<div class="section-title">1 — Fila disponível</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">1 — Critério de experiência</div>', unsafe_allow_html=True)
+    st.caption("Opcional: use a coluna F — PI (Tipo Projeto) para direcionar projetos simples aos menos experientes e projetos mais difíceis aos mais experientes.")
+
+    if CAN_EDIT:
+        experience_toggle = st.toggle(
+            "Usar experiência do projetista na distribuição",
+            value=EXPERIENCE_ENABLED,
+            key="experience_toggle_page_v13",
+        )
+        if bool(experience_toggle) != bool(st.session_state.cfg_experience_enabled):
+            st.session_state.cfg_experience_enabled = bool(experience_toggle)
+            reset_simulation()
+            st.rerun()
+    else:
+        st.info("Critério por experiência: **ativo**" if EXPERIENCE_ENABLED else "Critério por experiência: **desativado**")
+
+    if EXPERIENCE_ENABLED:
+        if CAN_EDIT:
+            mode_idx = EXPERIENCE_MODES.index(EXPERIENCE_MODE) if EXPERIENCE_MODE in EXPERIENCE_MODES else 0
+            selected_mode = st.radio(
+                "Como aplicar a experiência?",
+                EXPERIENCE_MODES,
+                index=mode_idx,
+                horizontal=True,
+                help="Preferencial tenta casar o nível e usa outras opções apenas como fallback. Estrito nunca entrega projeto acima do nível do projetista.",
+            )
+            if selected_mode != st.session_state.cfg_experience_mode:
+                st.session_state.cfg_experience_mode = selected_mode
+                reset_simulation()
+                st.rerun()
+
+        profile_left, profile_right = st.columns(2)
+        with profile_left:
+            st.markdown("**Nível dos projetistas**")
+            exp_current = st.session_state.designer_experience_profile.copy().reset_index(drop=True)
+            if CAN_EDIT:
+                exp_edited = st.data_editor(
+                    exp_current,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["Projetista"],
+                    column_config={
+                        "Projetista": st.column_config.TextColumn("Projetista", width="large"),
+                        "Experiência": st.column_config.SelectboxColumn("Experiência", options=EXPERIENCE_LEVELS, required=True, width="medium"),
+                    },
+                    key="designer_experience_editor_v13",
+                    height=min(520, 78 + 35 * max(1, len(exp_current))),
+                )
+                normalized_exp = exp_edited.copy()
+                normalized_exp["Experiência"] = normalized_exp["Experiência"].map(normalize_experience_label)
+                if not normalized_exp.astype(str).equals(exp_current.astype(str)):
+                    st.session_state.designer_experience_profile = normalized_exp
+                    reset_simulation()
+                    st.rerun()
+            else:
+                st.dataframe(exp_current, use_container_width=True, hide_index=True)
+
+        with profile_right:
+            st.markdown("**Dificuldade por PI (Tipo Projeto)**")
+            diff_current = st.session_state.project_difficulty_profile.copy().reset_index(drop=True)
+            if diff_current.empty:
+                st.warning("A BASE LIST não possui valores em PI (Tipo Projeto). O critério de experiência não poderá diferenciar as obras.")
+            elif CAN_EDIT:
+                diff_edited = st.data_editor(
+                    diff_current,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=[PROJECT_TYPE_LABEL],
+                    column_config={
+                        PROJECT_TYPE_LABEL: st.column_config.TextColumn(PROJECT_TYPE_LABEL, width="large"),
+                        "Dificuldade": st.column_config.SelectboxColumn("Dificuldade", options=DIFFICULTY_LEVELS, required=True, width="medium"),
+                    },
+                    key="project_difficulty_editor_v13",
+                    height=min(520, 78 + 35 * max(1, len(diff_current))),
+                )
+                normalized_diff = diff_edited.copy()
+                normalized_diff["Dificuldade"] = normalized_diff["Dificuldade"].map(normalize_difficulty_label)
+                if not normalized_diff.astype(str).equals(diff_current.astype(str)):
+                    st.session_state.project_difficulty_profile = normalized_diff
+                    reset_simulation()
+                    st.rerun()
+            else:
+                st.dataframe(diff_current, use_container_width=True, hide_index=True)
+
+        e1, e2, e3, e4 = st.columns(4)
+        exp_counts = st.session_state.designer_experience_profile["Experiência"].value_counts() if not st.session_state.designer_experience_profile.empty else pd.Series(dtype=int)
+        diff_counts = st.session_state.project_difficulty_profile["Dificuldade"].value_counts() if not st.session_state.project_difficulty_profile.empty else pd.Series(dtype=int)
+        e1.metric("Menos experientes", int(exp_counts.get("Menos experiente", 0)))
+        e2.metric("Experientes", int(exp_counts.get("Experiente", 0)))
+        e3.metric("PI fáceis", int(diff_counts.get("Fácil", 0)))
+        e4.metric("PI difíceis", int(diff_counts.get("Difícil", 0)))
+        st.caption("Encaixe preferido: **Menos experiente ↔ Fácil** • **Intermediário ↔ Médio** • **Experiente ↔ Difícil**.")
+        if EXPERIENCE_MODE == "Estrito":
+            st.warning("Modo Estrito: um projetista não receberá projeto classificado acima do seu nível de experiência.")
+        else:
+            st.info("Modo Preferencial: o sistema prioriza o melhor encaixe de experiência, mas pode usar outro nível como fallback se necessário.")
+
+    st.markdown('<div class="section-title">2 — Fila disponível</div>', unsafe_allow_html=True)
     st.caption("Obras já atribuídas nunca são redistribuídas automaticamente.")
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("Obras prontas", len(eligible_available))
@@ -902,14 +1148,17 @@ elif PAGE == "⚡ Distribuir obras":
     d3.metric("Sem obras", without_load)
     d4.metric("Equilíbrio atual", f'{balance["score"]:.0f}%')
 
-    queue_cols = ["sgo", "posts", "priority", "deadline", "regional", "municipality"]
+    queue_cols = ["sgo", "project_type", "posts", "priority", "deadline", "regional", "municipality"]
     queue = eligible_available[queue_cols].copy().rename(columns={
-        "sgo": "Nota SGO", "posts": "PLN", "priority": "Prioridade", "deadline": "Prazo", "regional": "Regional", "municipality": "Município"
+        "sgo": "Nota SGO", "project_type": PROJECT_TYPE_LABEL, "posts": POSTS_LABEL,
+        "priority": "Prioridade", "deadline": "Prazo", "regional": "Regional", "municipality": "Município"
     })
+    if EXPERIENCE_ENABLED and not queue.empty:
+        queue["Dificuldade"] = queue[PROJECT_TYPE_LABEL].map(difficulty_for_project_type)
     if not queue.empty:
         st.dataframe(queue.head(100), use_container_width=True, hide_index=True)
 
-    st.markdown('<div class="section-title">2 — Simulação</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">3 — Simulação</div>', unsafe_allow_html=True)
     if CAN_EDIT and st.button("🔎 GERAR / ATUALIZAR SIMULAÇÃO", use_container_width=True, disabled=len(eligible_available) == 0):
         run_simulation()
         st.rerun()
@@ -921,9 +1170,13 @@ elif PAGE == "⚡ Distribuir obras":
         st.caption("Você pode retirar uma linha da distribuição ou trocar o projetista antes de gerar a planilha. O sistema valida o teto de carteira.")
         editor = sim.copy()
         editor.insert(0, "Incluir", True)
-        editable_cols = [
-            "Incluir", "Projetista", "Nota SGO", "PLN", "Prioridade", "Prazo", "Regional", "Município",
-            "Carga antes (postes)", "Carga depois (postes)", "Motivo", "item_id", "Nº da nota", "Carga antes (projetos)", "Carga depois (projetos)", "etag",
+        editable_cols = ["Incluir", "Projetista", "Nota SGO", PROJECT_TYPE_LABEL]
+        if EXPERIENCE_ENABLED:
+            editable_cols += ["Dificuldade", "Experiência projetista"]
+        editable_cols += [
+            POSTS_LABEL, "Prioridade", "Prazo", "Regional", "Município",
+            "Carga antes (postes)", "Carga depois (postes)", "Motivo", "item_id", "Nº da nota",
+            "Carga antes (projetos)", "Carga depois (projetos)", "etag",
         ]
         editable_cols = [c for c in editable_cols if c in editor.columns]
         edited = st.data_editor(
@@ -934,9 +1187,13 @@ elif PAGE == "⚡ Distribuir obras":
             column_config={
                 "Incluir": st.column_config.CheckboxColumn("Incluir", default=True),
                 "Projetista": st.column_config.SelectboxColumn("Projetista", options=DESIGNERS, required=True, width="large"),
+                PROJECT_TYPE_LABEL: st.column_config.TextColumn(PROJECT_TYPE_LABEL, width="medium"),
+                "Dificuldade": st.column_config.TextColumn("Dificuldade", width="small"),
+                "Experiência projetista": st.column_config.TextColumn("Experiência", width="medium"),
+                POSTS_LABEL: st.column_config.NumberColumn(POSTS_LABEL, width="medium"),
                 "Motivo": st.column_config.TextColumn("Por que recebeu?", width="large"),
             },
-            key="distribution_editor_v12",
+            key="distribution_editor_v13",
         )
         final_sim = edited[edited["Incluir"]].drop(columns=["Incluir"], errors="ignore").copy()
         final_sim = recalculate_manual_simulation(final_sim)
@@ -955,7 +1212,7 @@ elif PAGE == "⚡ Distribuir obras":
                 st.session_state.simulated_suggestions = original.loc[edited_idx.index].reset_index()
                 st.success("Ajustes salvos.")
 
-            st.markdown('<div class="section-title">3 — Gerar resultado</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">4 — Gerar resultado</div>', unsafe_allow_html=True)
             if CAN_EDIT and source_mode == "Excel - validação":
                 if st.button("✅ GERAR NOVA BASE LIST DISTRIBUÍDA", type="primary", use_container_width=True):
                     st.session_state.simulated_suggestions = final_sim.copy()
@@ -986,7 +1243,7 @@ elif PAGE == "⚡ Distribuir obras":
     if not st.session_state.simulated_summary.empty:
         st.markdown("#### Como fica a carga após a simulação")
         summary = st.session_state.simulated_summary.copy()
-        wanted = ["Projetista", "Potencial postes após distribuição", "Potencial projetos após distribuição", "Novos projetos sugeridos", "Novos postes sugeridos", "Motivo"]
+        wanted = ["Projetista", "Experiência", "Potencial postes após distribuição", "Potencial projetos após distribuição", "Novos projetos sugeridos", "Novos postes sugeridos", "Motivo"]
         wanted = [c for c in wanted if c in summary.columns]
         st.dataframe(summary[wanted], use_container_width=True, hide_index=True)
         plot = summary.sort_values("Potencial postes após distribuição")
@@ -1002,7 +1259,7 @@ elif PAGE == "⚡ Distribuir obras":
             - Distribui em rodadas para evitar concentração.
             - Se habilitado, usa **Prioridade e Prazo** para ordenar a fila.
             - Nunca move automaticamente uma obra já atribuída.
-            - Bloqueia obra sem Nota SGO ou PLN válido.
+            - Bloqueia obra sem Nota SGO ou Postes Alterados/Novos válido.
             - Não ultrapassa o teto de **{MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos**.
             - Excedente de um dia não reduz a meta do dia seguinte.
             """
@@ -1016,7 +1273,7 @@ elif PAGE == "👷 Produtividade":
     selected_label = ANALYSIS_NOW.strftime("%d/%m/%Y")
     is_current_day = analysis_date == NOW.date()
     st.markdown(f'<div class="section-title">Produtividade em {selected_label}</div>', unsafe_allow_html=True)
-    st.caption("Produção = projetos com Data de entrega do projeto na data analisada. Postes usa Qtd. de poste final; PLN é fallback.")
+    st.caption("Produção = projetos com Data de entrega do projeto na data analisada. Postes usa Qtd. de poste final; Postes Alterados/Novos é o fallback.")
 
     total_posts_day = int(pd.to_numeric(analysis_snapshot["Postes realizados"], errors="coerce").fillna(0).sum())
     total_projects_day = int(pd.to_numeric(analysis_snapshot["Projetos realizados"], errors="coerce").fillna(0).sum())
@@ -1061,7 +1318,7 @@ elif PAGE == "👷 Produtividade":
         st.plotly_chart(style_figure(fig, max(390, 27 * len(plot))), use_container_width=True)
 
     with individual_tab:
-        selected_designer = st.selectbox("Projetista", DESIGNERS, key="designer_history_v12")
+        selected_designer = st.selectbox("Projetista", DESIGNERS, key="designer_history_v13")
         history = designer_daily_history(projects, selected_designer, analysis_date, TARGETS, TIMEZONE, days=20)
         h1, h2, h3 = st.columns(3)
         h1.metric("Postes nos últimos 20 dias úteis", int(history["Postes"].sum()))
@@ -1145,12 +1402,12 @@ elif PAGE == "🔎 Dados e regras":
     q1.metric("Em projeto", quality["em_projeto"])
     q2.metric("Disponíveis", quality["disponiveis"])
     q3.metric("Já atribuídas", quality["atribuidos"])
-    q4.metric("Sem PLN", quality["disponiveis_sem_pln"])
+    q4.metric("Sem Postes Alt./Novos", quality["disponiveis_sem_pln"])
     q5.metric("Sem SGO", quality["disponiveis_sem_sgo"])
     q6.metric("SGO duplicado", quality.get("sgo_duplicado", 0))
 
     if quality["disponiveis_sem_pln"] or quality["disponiveis_sem_sgo"] or quality.get("sgo_duplicado", 0) or quality.get("nota_duplicada", 0):
-        st.warning("Existem inconsistências que merecem revisão. Obras sem PLN/SGO ficam bloqueadas para distribuição automática.")
+        st.warning("Existem inconsistências que merecem revisão. Obras sem Postes Alterados/Novos ou SGO ficam bloqueadas para distribuição automática.")
 
     with st.expander("Obras bloqueadas para distribuição", expanded=True):
         blocked = prepared[
@@ -1158,10 +1415,10 @@ elif PAGE == "🔎 Dados e regras":
             & (prepared["assignee_norm"] == "")
             & (~prepared["posts_valid"] | ~prepared["sgo_present"])
         ][["note", "sgo", "posts", "regional", "municipality"]].rename(columns={
-            "note": "Nº da nota", "sgo": "Nota SGO", "posts": "PLN", "regional": "Regional", "municipality": "Município"
+            "note": "Nº da nota", "sgo": "Nota SGO", "posts": POSTS_LABEL, "regional": "Regional", "municipality": "Município"
         })
         if blocked.empty:
-            st.success("Nenhuma obra disponível está bloqueada por falta de SGO ou PLN.")
+            st.success("Nenhuma obra disponível está bloqueada por falta de SGO ou Postes Alterados/Novos.")
         else:
             st.dataframe(blocked, use_container_width=True, hide_index=True)
 
@@ -1184,9 +1441,10 @@ elif PAGE == "🔎 Dados e regras":
             **Faixa mínima**: {TARGETS.min_posts} postes / {TARGETS.min_projects} projetos.  
             **Teto de carteira**: {MAX_PORTFOLIO_POSTS} postes / {MAX_PORTFOLIO_PROJECTS} projetos.  
             **Meta não cumulativa**: excedente de um dia não reduz a meta do dia seguinte.  
-            **Carteira**: Status = Em projeto + Projetistas preenchido; peso = PLN.  
-            **Elegível para distribuição**: Em projeto + Projetistas vazio + Nota SGO + PLN válido.  
-            **Produção**: Data de entrega do projeto; Qtd. de poste final, com PLN como fallback.  
+            **Carteira**: Status = Em projeto + Projetistas preenchido; peso = Postes Alterados/Novos (coluna R).  
+            **Elegível para distribuição**: Em projeto + Projetistas vazio + Nota SGO + Postes Alterados/Novos válido.  
+            **Produção**: Data de entrega do projeto; Qtd. de poste final, com Postes Alterados/Novos como fallback.  
+            **Critério por experiência**: {"Ativo — " + EXPERIENCE_MODE if EXPERIENCE_ENABLED else "Desativado"}. Quando ativo, usa PI (Tipo Projeto) da coluna F.  
             **Jornada**: 08:00–12:00 e 13:12–18:00 ({TOTAL_WORK_MINUTES} minutos produtivos).
             """
         )
@@ -1210,8 +1468,8 @@ elif PAGE == "🔎 Dados e regras":
         pool_mask = show["status_norm"].isin(STATUS.project_pool_set)
         show.loc[pool_mask & (show["assignee_norm"] == ""), "Disponibilidade"] = "Disponível"
         show.loc[pool_mask & (show["assignee_norm"] != ""), "Disponibilidade"] = "Atribuído"
-        display = show[["note", "sgo", "status", "posts", "assignee", "regional", "municipality", "deadline", "Disponibilidade"]].rename(columns={
-            "note": "Nº da nota", "sgo": "Nota SGO", "status": "Status", "posts": "PLN",
+        display = show[["note", "sgo", "status", "project_type", "posts", "assignee", "regional", "municipality", "deadline", "Disponibilidade"]].rename(columns={
+            "note": "Nº da nota", "sgo": "Nota SGO", "status": "Status", "project_type": PROJECT_TYPE_LABEL, "posts": POSTS_LABEL,
             "assignee": "Projetista", "regional": "Regional", "municipality": "Município", "deadline": "Prazo",
         })
         st.dataframe(display, use_container_width=True, hide_index=True)
@@ -1231,6 +1489,10 @@ elif PAGE == "🔎 Dados e regras":
             max_portfolio_posts=MAX_PORTFOLIO_POSTS,
             max_portfolio_projects=MAX_PORTFOLIO_PROJECTS,
             priority_enabled=PRIORITY_ENABLED,
+            experience_enabled=EXPERIENCE_ENABLED,
+            experience_mode=EXPERIENCE_MODE,
+            designer_experience=designer_experience_map(),
+            project_difficulty=project_difficulty_map(),
         )
         audit = AuditStore("data/automation_audit.sqlite3")
         engine = AutomationEngine(TARGETS, STATUS, policy=policy, audit=audit)
@@ -1245,4 +1507,4 @@ elif PAGE == "🔎 Dados e regras":
             else:
                 st.warning(result.message)
             if not result.suggestions.empty:
-                st.dataframe(result.suggestions.drop(columns=["etag"], errors="ignore"), use_container_width=True, hide_index=True)
+                st.dataframe(result.suggestions.drop(columns=["etag", "PLN"], errors="ignore"), use_container_width=True, hide_index=True)

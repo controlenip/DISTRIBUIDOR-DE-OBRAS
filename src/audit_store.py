@@ -126,7 +126,7 @@ class AuditStore:
                     None if pd.isna(row.get("Nº da nota")) else str(row.get("Nº da nota")),
                     None if pd.isna(row.get("Nota SGO")) else str(row.get("Nota SGO")),
                     str(row.get("Projetista", "")),
-                    int(row.get("PLN", 0) or 0),
+                    int(row.get("Postes Alterados/Novos", row.get("PLN", 0)) or 0),
                     action,
                     result,
                     reason or str(row.get("Motivo", "")),
