@@ -1,0 +1,12 @@
+Campo lógico,Coluna Excel,Nome esperado,Uso,Obrigatório
+Número da nota,A,N° da nota,Identificação da solicitação,Sim
+Nota SGO,C,Nota SGO,Número usado pelo projetista para iniciar o projeto,Sim
+Status,E,Status do projeto,Define se a obra entra na carteira/distribuição,Sim
+PI (Tipo Projeto),F,PI (Tipo Projeto),Pode classificar a dificuldade da obra para distribuição por experiência,Recomendado
+Regional,G,Regional,Contexto operacional,Não
+Município,H,Município,Contexto operacional,Não
+Postes Alterados/Novos,R,P L N,Peso da obra para distribuição aos projetistas,Sim
+Projetista,U,Projetistas,Responsável atribuído,Sim
+Data de entrega,V,Data de entrega do projeto,Data usada para produtividade diária,Recomendado
+Qtd. final de postes,W,Qtd. de poste,Produção final; Postes Alterados/Novos é fallback,Não
+Prioridade,AP,Prioridade,Ordenação da fila,Não

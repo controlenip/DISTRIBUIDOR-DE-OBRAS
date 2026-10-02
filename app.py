@@ -138,6 +138,29 @@ st.markdown(
     [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {background:#B91C1C !important; border-color:#B91C1C !important;}
     [data-testid="stSidebar"] .stButton > button:disabled {background:#6B7280 !important; color:#E5E7EB !important; border-color:#6B7280 !important; opacity:.8;}
 
+    /* Sidebar number inputs / steppers: force high contrast so +/- are always visible. */
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] label,
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] p {
+        color:#F8FAFC !important; font-weight:650 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] input {
+        background:#FFFFFF !important; color:#0F172A !important; border:1px solid #BFD2E6 !important;
+        border-radius:10px 0 0 10px !important; font-weight:700 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] button {
+        background:#E8F0F8 !important; color:#123B68 !important; border:1px solid #BFD2E6 !important;
+        opacity:1 !important; min-width:34px !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] button:hover {
+        background:#D7E7F5 !important; color:#0E2C4D !important; border-color:#96B5D3 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] button svg {
+        fill:#123B68 !important; color:#123B68 !important; opacity:1 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stNumberInputContainer"] {
+        background:transparent !important;
+    }
+
     [data-baseweb="tab-list"] {gap:5px; flex-wrap:wrap;}
     [data-baseweb="tab"] {border-radius:9px 9px 0 0; padding-left:12px; padding-right:12px;}
     </style>

@@ -1,10 +1,10 @@
-# NIP Smart Distribuição — V13
+# NIP Smart Distribuição — V14
 
 Aplicação em **Python + Streamlit** para distribuição equilibrada de obras entre projetistas e acompanhamento de produtividade diária, semanal e mensal.
 
-## O que mudou na V13
+## O que mudou na V14
 
-Além dos recursos da V12, a V13 acrescenta dois pontos principais:
+Além dos recursos da V12, a V14 acrescenta dois pontos principais:
 
 - o nome **PLN** deixa de aparecer para o usuário e passa a ser exibido como **Postes Alterados/Novos**;
 - a coluna **F — PI (Tipo Projeto)** pode ser usada para distribuir projetos conforme a experiência do projetista.
@@ -97,4 +97,4 @@ Execute:
 pytest -q
 ```
 
-A V13 inclui testes de distribuição por experiência, modo Estrito, Postes Alterados/Novos, teto de carteira, prioridade, Excel e regras de jornada.
+A V14 inclui testes de distribuição por experiência, modo Estrito, Postes Alterados/Novos, teto de carteira, prioridade, Excel e regras de jornada.
