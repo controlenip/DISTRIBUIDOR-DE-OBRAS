@@ -161,6 +161,29 @@ st.markdown(
         background:transparent !important;
     }
 
+    /* Sidebar expander: keep header readable against the dark sidebar. */
+    [data-testid="stSidebar"] [data-testid="stExpander"] details {
+        border:1px solid #2D8FC7 !important;
+        border-radius:10px !important;
+        overflow:hidden !important;
+        background:#123B68 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        background:#174B79 !important;
+        color:#FFFFFF !important;
+        min-height:46px !important;
+        font-weight:760 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+        background:#1F5D96 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary *,
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary svg {
+        color:#FFFFFF !important;
+        fill:#FFFFFF !important;
+        opacity:1 !important;
+    }
+
     [data-baseweb="tab-list"] {gap:5px; flex-wrap:wrap;}
     [data-baseweb="tab"] {border-radius:9px 9px 0 0; padding-left:12px; padding-right:12px;}
     </style>
