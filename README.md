@@ -124,3 +124,8 @@ streamlit run app.py
 A integração está preparada via Microsoft Graph. Antes de ativar escrita real, valide os nomes internos das colunas e mantenha `write_enabled = false` nos Secrets.
 
 Nunca envie credenciais, `secrets.toml`, `BASE_LIST.xlsx` ou `PROJETISTAS.xlsx` para um repositório público.
+
+## V8 - quadro diário simplificado
+- Tabela de atenção reduzida para 6 colunas: Projetista, Produção hoje, Carteira atual, Falta para meta, Previsão 18h e Situação.
+- Indicadores detalhados permanecem disponíveis em área expansível.
+- Status exibidos com ícones para facilitar leitura rápida.

@@ -27,17 +27,27 @@ def _business_dates(start: date, end: date) -> list[date]:
 
 
 def designer_attention_table(snapshot: pd.DataFrame, target_posts: int, target_projects: int) -> pd.DataFrame:
-    """Daily list of designers who need management attention.
+    """Return a compact daily management list focused on action.
 
-    The list combines production pace, end-of-day forecast and missing portfolio
-    coverage. It intentionally contains only project designers.
+    The detailed operational metrics remain available in the production tab, while
+    this table intentionally combines posts/projects into short readable columns.
     """
     if snapshot.empty:
         return snapshot.copy()
 
     df = snapshot.copy()
-    df["Déficit postes hoje"] = (target_posts - df["Postes realizados"]).clip(lower=0)
-    df["Déficit projetos hoje"] = (target_projects - df["Projetos realizados"]).clip(lower=0)
+    for col in [
+        "Postes realizados", "Projetos realizados", "Postes em carteira", "Projetos em carteira",
+        "Meta postes agora", "Meta projetos agora", "Previsão postes 18h", "Previsão projetos 18h",
+        "Sem cobertura postes", "Sem cobertura projetos",
+    ]:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    df["Faltam postes"] = (target_posts - df["Postes realizados"]).clip(lower=0)
+    df["Faltam projetos"] = (target_projects - df["Projetos realizados"]).clip(lower=0)
+
     risk_status = {"Falta de carga", "Risco produtivo", "Encerrado abaixo da meta", "PLN pendente na carteira"}
     mask = (
         df["Situação"].isin(risk_status)
@@ -46,15 +56,46 @@ def designer_attention_table(snapshot: pd.DataFrame, target_posts: int, target_p
         | (df["Previsão postes 18h"] < target_posts)
         | (df["Previsão projetos 18h"] < target_projects)
     )
-    cols = [
-        "Projetista", "Postes realizados", "Projetos realizados", "Meta postes agora",
-        "Meta projetos agora", "Déficit postes hoje", "Déficit projetos hoje",
-        "Previsão postes 18h", "Previsão projetos 18h", "Sem cobertura postes",
-        "Sem cobertura projetos", "Situação",
-    ]
-    return df.loc[mask, cols].sort_values(
+
+    status_icon = {
+        "Meta atingida": "✅ Meta atingida",
+        "Faixa mínima atingida": "🟢 Faixa mínima",
+        "Carteira suficiente": "🔵 Carteira suficiente",
+        "Falta de carga": "🟠 Falta de carga",
+        "Risco produtivo": "🔴 Risco produtivo",
+        "Encerrado abaixo da meta": "🔴 Abaixo da meta",
+        "PLN pendente na carteira": "🟡 PLN pendente",
+    }
+
+    view = df.loc[mask].copy()
+    if view.empty:
+        return pd.DataFrame(columns=["Projetista", "Produção hoje", "Carteira atual", "Falta para meta", "Previsão 18h", "Situação"])
+
+    def n(value: float) -> str:
+        value = float(value)
+        return str(int(value)) if value.is_integer() else f"{value:.1f}"
+
+    view["Produção hoje"] = view.apply(
+        lambda r: f'{n(r["Postes realizados"])} postes • {n(r["Projetos realizados"])} proj.', axis=1
+    )
+    view["Carteira atual"] = view.apply(
+        lambda r: f'{n(r["Postes em carteira"])} postes • {n(r["Projetos em carteira"])} proj.', axis=1
+    )
+    view["Falta para meta"] = view.apply(
+        lambda r: f'{n(r["Faltam postes"])} postes • {n(r["Faltam projetos"])} proj.', axis=1
+    )
+    view["Previsão 18h"] = view.apply(
+        lambda r: f'{n(r["Previsão postes 18h"])} postes • {n(r["Previsão projetos 18h"])} proj.', axis=1
+    )
+    view["Situação visual"] = view["Situação"].map(status_icon).fillna(view["Situação"])
+
+    # Keep numeric sort keys out of the final visual table.
+    view = view.sort_values(
         ["Previsão postes 18h", "Postes realizados", "Projetista"],
         ascending=[True, True, True],
+    )
+    return view[["Projetista", "Produção hoje", "Carteira atual", "Falta para meta", "Previsão 18h", "Situação visual"]].rename(
+        columns={"Situação visual": "Situação"}
     ).reset_index(drop=True)
 
 

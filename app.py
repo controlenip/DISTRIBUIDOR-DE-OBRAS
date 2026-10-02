@@ -117,6 +117,64 @@ def render_insights(items: list[str]):
         st.markdown(f'<div class="insight-card">💡 {item}</div>', unsafe_allow_html=True)
 
 
+def compact_daily_table(snapshot: pd.DataFrame, target_posts: int, target_projects: int) -> pd.DataFrame:
+    """Compact visual table for the daily operational view."""
+    if snapshot.empty:
+        return pd.DataFrame(columns=["Projetista", "Produção hoje", "Carteira atual", "Falta para meta", "Previsão 18h", "Situação"])
+
+    df = snapshot.copy()
+    numeric_cols = [
+        "Postes realizados", "Projetos realizados", "Postes em carteira", "Projetos em carteira",
+        "Previsão postes 18h", "Previsão projetos 18h",
+    ]
+    for col in numeric_cols:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    def n(value) -> str:
+        value = float(value)
+        return str(int(value)) if value.is_integer() else f"{value:.1f}"
+
+    status_icon = {
+        "Meta atingida": "✅ Meta atingida",
+        "Faixa mínima atingida": "🟢 Faixa mínima",
+        "Carteira suficiente": "🔵 Carteira suficiente",
+        "Falta de carga": "🟠 Falta de carga",
+        "Risco produtivo": "🔴 Risco produtivo",
+        "Encerrado abaixo da meta": "🔴 Abaixo da meta",
+        "PLN pendente na carteira": "🟡 PLN pendente",
+    }
+
+    df["Produção hoje"] = df.apply(
+        lambda r: f'{n(r["Postes realizados"])} postes • {n(r["Projetos realizados"])} proj.', axis=1
+    )
+    df["Carteira atual"] = df.apply(
+        lambda r: f'{n(r["Postes em carteira"])} postes • {n(r["Projetos em carteira"])} proj.', axis=1
+    )
+    df["Falta para meta"] = df.apply(
+        lambda r: f'{n(max(0, target_posts-r["Postes realizados"]))} postes • {n(max(0, target_projects-r["Projetos realizados"]))} proj.', axis=1
+    )
+    df["Previsão 18h"] = df.apply(
+        lambda r: f'{n(r["Previsão postes 18h"])} postes • {n(r["Previsão projetos 18h"])} proj.', axis=1
+    )
+    df["Situação visual"] = df["Situação"].map(status_icon).fillna(df["Situação"])
+    return df[["Projetista", "Produção hoje", "Carteira atual", "Falta para meta", "Previsão 18h", "Situação visual"]].rename(
+        columns={"Situação visual": "Situação"}
+    )
+
+
+def compact_table_config():
+    return {
+        "Projetista": st.column_config.TextColumn("Projetista", width="large"),
+        "Produção hoje": st.column_config.TextColumn("Produção hoje", width="medium"),
+        "Carteira atual": st.column_config.TextColumn("Carteira atual", width="medium"),
+        "Falta para meta": st.column_config.TextColumn("Falta para meta", width="medium"),
+        "Previsão 18h": st.column_config.TextColumn("Previsão 18h", width="medium"),
+        "Situação": st.column_config.TextColumn("Situação", width="medium"),
+    }
+
+
 
 SECRETS = secrets_dict()
 TIMEZONE = nested(SECRETS, "app", "timezone", default="America/Fortaleza")
@@ -450,7 +508,13 @@ with tab_dashboard:
     else:
         label = "Não atingiram / estão abaixo da meta hoje" if remaining == 0 else "Abaixo do ritmo, sem cobertura ou em risco hoje"
         st.caption(label)
-        st.dataframe(designer_attention, use_container_width=True, hide_index=True)
+        st.dataframe(
+            designer_attention,
+            use_container_width=True,
+            hide_index=True,
+            column_config=compact_table_config(),
+            height=min(520, 78 + 35 * len(designer_attention)),
+        )
 
     c3, c4 = st.columns([1.35, 1])
     with c3:
@@ -510,14 +574,25 @@ with tab_load:
 
 with tab_today:
     st.subheader("Produção diária dos projetistas")
-    st.caption("A produção usa **Data de entrega do projeto** como referência do dia, mesmo que o status já tenha avançado para Análise de Qualidade.")
-    cols = [
-        "Projetista", "Postes realizados", "Projetos realizados", "Postes em carteira", "Projetos em carteira",
-        "Potencial postes", "Potencial projetos", "Meta postes agora", "Meta projetos agora",
-        "Aderência postes %", "Aderência projetos %", "Previsão postes 18h", "Previsão projetos 18h",
-        "Sem cobertura postes", "Sem cobertura projetos", "Status ritmo", "Situação",
-    ]
-    st.dataframe(snapshot[cols], use_container_width=True, hide_index=True)
+    st.caption("Visão resumida para decisão rápida. Os detalhes técnicos ficam recolhidos abaixo.")
+
+    daily_compact = compact_daily_table(snapshot, TARGETS.target_posts, TARGETS.target_projects)
+    st.dataframe(
+        daily_compact,
+        use_container_width=True,
+        hide_index=True,
+        column_config=compact_table_config(),
+        height=min(620, 78 + 35 * len(daily_compact)),
+    )
+
+    with st.expander("Ver indicadores detalhados"):
+        detail_cols = [
+            "Projetista", "Postes realizados", "Projetos realizados", "Postes em carteira", "Projetos em carteira",
+            "Potencial postes", "Potencial projetos", "Meta postes agora", "Meta projetos agora",
+            "Aderência postes %", "Aderência projetos %", "Previsão postes 18h", "Previsão projetos 18h",
+            "Sem cobertura postes", "Sem cobertura projetos", "Status ritmo", "Situação",
+        ]
+        st.dataframe(snapshot[detail_cols], use_container_width=True, hide_index=True)
 
     melted = snapshot[["Projetista", "Postes realizados", "Postes em carteira"]].melt(
         id_vars="Projetista", var_name="Componente", value_name="Postes"
@@ -527,7 +602,16 @@ with tab_today:
     st.plotly_chart(style_figure(fig, 430), use_container_width=True)
 
     st.markdown("#### Quem precisa de atenção hoje")
-    st.dataframe(designer_attention, use_container_width=True, hide_index=True)
+    if designer_attention.empty:
+        st.success("Nenhum projetista precisa de atenção neste momento.")
+    else:
+        st.dataframe(
+            designer_attention,
+            use_container_width=True,
+            hide_index=True,
+            column_config=compact_table_config(),
+            height=min(520, 78 + 35 * len(designer_attention)),
+        )
 
 with tab_distribution:
     st.subheader("Distribuição inteligente de obras")
