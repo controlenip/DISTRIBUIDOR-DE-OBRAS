@@ -412,6 +412,7 @@ SESSION_DEFAULTS = {
     "designer_experience_profile": pd.DataFrame(),
     "project_difficulty_profile": pd.DataFrame(),
     "experience_profile_source_signature": "",
+    "pending_nav": "",
 }
 for key, default in SESSION_DEFAULTS.items():
     if key not in st.session_state:
@@ -501,9 +502,17 @@ def make_repository() -> ListsProjectRepository:
 st.sidebar.markdown("## ⚡ NIP Smart")
 st.sidebar.caption("Distribuição de obras e produtividade")
 
+# Apply programmatic navigation before the radio widget is instantiated.
+# Streamlit does not allow changing a widget-backed session_state key after
+# that widget has already been created in the same run.
+pending_nav = st.session_state.get("pending_nav", "")
+if pending_nav:
+    st.session_state["nav_page"] = pending_nav
+    st.session_state["pending_nav"] = ""
+
 PAGE = st.sidebar.radio(
     "Menu",
-    ["🏠 Início", "⚡ Distribuir obras", "👷 Produtividade", "⚙️ Regras e parâmetros"],
+    ["🏠 Início", "⚡ Distribuir obras", "👷 Produtividade", "⚙️ Regras e parâmetros", "❓ FAQ / Como usar"],
     index=0,
     key="nav_page",
 )
@@ -530,6 +539,7 @@ st.sidebar.markdown("**Como usar**")
 st.sidebar.caption("1. Carregue as bases e a lista de projetistas")
 st.sidebar.caption("2. Simule e confira")
 st.sidebar.caption("3. Gere e baixe as BASE LIST distribuídas")
+st.sidebar.caption("4. Dúvidas? Consulte o FAQ detalhado")
 
 st.sidebar.divider()
 if st.sidebar.button("🧹 LIMPAR DADOS", type="primary", use_container_width=True, help="Apaga arquivos e resultados temporários desta sessão."):
@@ -591,6 +601,7 @@ page_subtitles = {
     "⚡ Distribuir obras": "Simule, confira, ajuste e só depois gere a distribuição definitiva.",
     "👷 Produtividade": "Acompanhe metas, consistência, histórico individual e projeções.",
     "⚙️ Regras e parâmetros": "Entenda como carteira, produtividade e distribuição são calculadas e valide a qualidade da base.",
+    "❓ FAQ / Como usar": "Manual completo da ferramenta, regras, dúvidas frequentes e checklist para confirmar que tudo funcionou.",
 }
 st.markdown(
     f"""
@@ -604,6 +615,386 @@ st.markdown(
 if st.session_state.get("data_cleared_notice"):
     st.success("🧹 Dados limpos. A sessão voltou ao estado inicial.")
     st.session_state.data_cleared_notice = False
+
+
+# -----------------------------------------------------------------------------
+# FAQ / COMO USAR - AVAILABLE EVEN BEFORE FILE UPLOADS
+# -----------------------------------------------------------------------------
+if PAGE == "❓ FAQ / Como usar":
+    st.markdown('<div class="section-title">Guia rápido: como usar a ferramenta do início ao fim</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="rule-card">
+        <b>Fluxo correto:</b> carregue os 3 arquivos obrigatórios → confirme que aparece <b>3/3 arquivos carregados</b> →
+        confira a base combinada → simule a distribuição → revise quem receberá cada obra → gere as planilhas → baixe os arquivos distribuídos.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.write("")
+
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Arquivos obrigatórios", "3")
+    q2.metric("Meta diária padrão", f"{TARGETS.target_posts} postes / {TARGETS.target_projects} projetos")
+    q3.metric("Faixa mínima padrão", f"{TARGETS.min_posts} postes / {TARGETS.min_projects} projetos")
+    q4.metric("Jornada produtiva", "08:00–12:00 / 13:12–18:00")
+
+    with st.expander("1. Quais arquivos preciso carregar?", expanded=True):
+        st.markdown(
+            """
+            São obrigatórios **os três arquivos ao mesmo tempo**:
+
+            **BASE LIST LEVANTAMENTO** — base principal e completa. É dela que vêm informações como Nota SGO, Status, PI (Tipo Projeto), Postes Alterados/Novos, Projetista e Data de entrega do projeto.
+
+            **BASE LIST VU (Visualização Única)** — fonte complementar de projetos. A ferramenta lê **coluna A = número do projeto** e **coluna C = status**. Somente registros com status **Em projeto** entram na fila.
+
+            **PROJETISTAS** — lista oficial das pessoas que podem receber novas obras.
+
+            A ferramenta fica bloqueada se faltar qualquer um dos três arquivos. Isso é intencional.
+            """
+        )
+
+    with st.expander("2. Como LEVANTAMENTO e VU se combinam?"):
+        st.markdown(
+            """
+            As duas bases **se complementam** e formam uma fila maior de obras para distribuição.
+
+            - Obras do **LEVANTAMENTO** entram com todas as informações disponíveis, inclusive Postes Alterados/Novos.
+            - Obras da **VU** entram como projetos adicionais quando estão com status **Em projeto**.
+            - Se o mesmo número de projeto aparecer nas duas bases, a ferramenta mantém apenas o registro do **LEVANTAMENTO**, porque ele possui mais informações.
+            - A origem continua identificada internamente para que os downloads sejam gerados corretamente.
+
+            A VU não substitui o LEVANTAMENTO e o LEVANTAMENTO não substitui a VU. Os dois arquivos são obrigatórios.
+            """
+        )
+
+    with st.expander("3. O que significa 'carteira' e o que significa 'produtividade'?"):
+        st.markdown(
+            """
+            **Carteira** é o que o projetista ainda tem para fazer.
+
+            Uma obra entra na carteira quando está com **Status = Em projeto** e possui um projetista atribuído.
+            Estar na carteira **não significa produção realizada**.
+
+            **Produtividade** é o que o projetista realmente concluiu.
+
+            Uma obra só conta na produtividade quando existem **duas condições simultâneas**:
+
+            1. **Status = Concluído**; e
+            2. **Coluna V — Data de entrega do projeto** preenchida com uma data válida.
+
+            Se estiver Concluído sem data na coluna V, a obra não entra na produtividade até a data ser corrigida.
+            """
+        )
+
+    with st.expander("4. Como a ferramenta calcula a meta diária?"):
+        st.markdown(
+            f"""
+            A meta padrão é **{TARGETS.target_posts} postes e {TARGETS.target_projects} projetos por dia**, com faixa mínima de
+            **{TARGETS.min_posts} postes e {TARGETS.min_projects} projetos**.
+
+            A meta é **diária e não cumulativa**. Se alguém produzir acima da meta hoje, o excedente não reduz a meta do dia seguinte.
+
+            Para decidir se alguém precisa receber novas obras, a ferramenta considera separadamente:
+
+            - o que já foi **Concluído hoje**;
+            - o que ainda está **Em projeto** na carteira;
+            - quanto falta para a meta;
+            - o teto de carteira configurado;
+            - e, quando habilitado, dificuldade do projeto e experiência do projetista.
+            """
+        )
+
+    with st.expander("5. O que é 'Postes Alterados/Novos'?"):
+        st.markdown(
+            """
+            É o nome exibido na ferramenta para a quantidade originalmente armazenada na **coluna R (P L N)** da BASE LIST LEVANTAMENTO.
+
+            Esse valor representa o peso em postes usado para calcular a carga da obra e ajudar no balanceamento da carteira.
+            O nome foi alterado apenas na interface para ficar mais fácil de entender; a planilha original não precisa mudar de cabeçalho.
+            """
+        )
+
+    with st.expander("6. Como funciona a distribuição automática?"):
+        st.markdown(
+            """
+            A ferramenta busca distribuir de forma equilibrada, dando prioridade a quem está com menor cobertura da meta.
+
+            Em termos práticos, ela procura responder:
+
+            - Quem está sem obra?
+            - Quem já tem alguma carga, mas ainda está abaixo da meta?
+            - Quem já está com carteira suficiente?
+            - Quem está bloqueado por projeto muito grande?
+            - Qual obra disponível melhor completa a necessidade restante?
+
+            Obras já atribuídas não são redistribuídas automaticamente.
+
+            O processo é feito primeiro em **simulação**. Nada deve ser gravado na planilha definitiva antes de você confirmar a simulação.
+            """
+        )
+
+    with st.expander("7. Como funciona a distribuição por experiência e Tipo de Projeto?"):
+        st.markdown(
+            """
+            Quando essa opção estiver habilitada, a ferramenta usa a **coluna F — PI (Tipo Projeto)** para classificar a dificuldade da obra.
+
+            Você pode classificar projetistas como **Menos experiente, Intermediário ou Experiente** e os tipos de projeto como **Fácil, Médio ou Difícil**.
+
+            No modo **Preferencial**, a ferramenta tenta respeitar o melhor encaixe, mas pode flexibilizar se necessário.
+
+            No modo **Estrito**, combinações incompatíveis são bloqueadas. Exemplo: um projetista menos experiente não recebe projeto classificado como Difícil.
+            """
+        )
+
+    with st.expander("8. O que acontece quando uma obra sozinha ultrapassa a meta diária?"):
+        st.markdown(
+            f"""
+            Se uma obra possuir mais de **{TARGETS.target_posts} Postes Alterados/Novos**, ela é tratada como projeto acima da meta diária.
+
+            Quando a trava estiver ativada:
+
+            - a obra só deve ser direcionada para alguém sem outras obras abertas na carteira;
+            - após receber essa obra, o projetista fica **🔒 Bloqueado — projeto acima da meta diária**;
+            - ele não recebe novas obras enquanto ainda possuir projetos em **Em projeto**;
+            - volta a ficar disponível quando a carteira for zerada porque as obras passaram para **Concluído**.
+
+            Essa regra existe para evitar uma carteira muito alta com baixa vazão de conclusão.
+            """
+        )
+
+    with st.expander("9. Como sei se a BASE LIST VU foi lida corretamente?"):
+        st.markdown(
+            """
+            Após o upload, a tela deve mostrar uma confirmação semelhante a **VU pronta — X projetos Em projeto**.
+
+            A ferramenta lê somente:
+
+            - **Coluna A:** número do projeto;
+            - **Coluna C:** status do projeto.
+
+            Se a VU tiver menos de três colunas, ou se o arquivo não puder ser lido como Excel, a ferramenta exibirá erro e não liberará a distribuição.
+            """
+        )
+
+    with st.expander("10. Como sei se os três arquivos foram carregados corretamente?"):
+        st.markdown(
+            """
+            Na página **Início**, verifique estes sinais:
+
+            1. Cada upload deve mostrar uma mensagem verde de sucesso.
+            2. A barra deve mostrar **3/3 arquivos carregados**.
+            3. Deve aparecer a mensagem **Base combinada pronta**.
+            4. Os botões de análise e distribuição deixam de ficar bloqueados.
+
+            Se aparecer **Distribuição bloqueada**, leia a mensagem logo abaixo: ela informa exatamente qual arquivo ainda está faltando.
+            """
+        )
+
+    with st.expander("11. Como sei se a simulação funcionou?"):
+        st.markdown(
+            """
+            Uma simulação válida deve apresentar uma tabela com as novas atribuições sugeridas.
+
+            Confira principalmente:
+
+            - **Projetista** que receberá a obra;
+            - **Nota SGO / número do projeto**;
+            - **Base de origem**;
+            - **Postes Alterados/Novos**, quando conhecido;
+            - **Tipo Projeto / dificuldade**, quando aplicável;
+            - **Motivo da atribuição**;
+            - carga do projetista antes e depois da sugestão.
+
+            Se a simulação estiver vazia, isso não significa necessariamente erro. Pode significar que não existem obras elegíveis ou que todos já estão suficientemente carregados/bloqueados.
+            """
+        )
+
+    with st.expander("12. Como sei se a distribuição definitiva funcionou?"):
+        st.markdown(
+            """
+            Use este checklist após clicar em gerar:
+
+            **Checklist de sucesso**
+
+            - aparece uma mensagem verde informando que a distribuição foi gerada;
+            - aparece pelo menos um botão de download quando houve novas atribuições;
+            - a **BASE LIST LEVANTAMENTO distribuída** mantém a estrutura original e altera somente os campos de atribuição previstos;
+            - a **BASE LIST VU distribuída** mantém as colunas originais e registra o projetista em uma coluna de atribuição criada/encontrada pela ferramenta;
+            - a aba **DISTRIBUICAO_AUTOMATICA** registra as decisões para conferência;
+            - o arquivo original enviado pelo usuário não é modificado.
+
+            Se a ferramenta disser que não houve novas atribuições, confira a fila disponível, os bloqueios e as regras antes de concluir que houve falha.
+            """
+        )
+
+    with st.expander("13. Por que um projetista não recebeu nenhuma obra?"):
+        st.markdown(
+            """
+            As causas mais comuns são:
+
+            - já possui carteira suficiente;
+            - atingiu o teto de carteira;
+            - possui um projeto acima da meta diária e está bloqueado;
+            - existe obra na carteira sem Postes Alterados/Novos válido, deixando a carga parcialmente desconhecida;
+            - a regra de experiência/dificuldade impediu a combinação;
+            - não existem projetos elegíveis disponíveis;
+            - outros projetistas estavam com cobertura menor e receberam prioridade.
+
+            Consulte **Regras e parâmetros** e a tabela de simulação para identificar o motivo específico.
+            """
+        )
+
+    with st.expander("14. Por que uma obra não entrou na distribuição?"):
+        st.markdown(
+            """
+            No LEVANTAMENTO, uma obra normalmente precisa estar **Em projeto**, sem projetista atribuído, com Nota SGO válida e quantidade de Postes Alterados/Novos válida para entrar na distribuição por carga.
+
+            Na VU, o projeto precisa estar **Em projeto** na coluna C. Como a VU não fornece quantidade de postes, ele contribui para a quantidade de projetos, mas não cria uma carga fictícia de postes.
+
+            Projetos duplicados entre LEVANTAMENTO e VU são mantidos apenas uma vez, com preferência pelo registro do LEVANTAMENTO.
+            """
+        )
+
+    with st.expander("15. O que significa cada situação do projetista?"):
+        st.markdown(
+            """
+            **✅ Meta atingida** — a produção do dia atingiu a meta configurada.
+
+            **🟢 Carteira suficiente / Carteira completa** — ainda pode não ter concluído a meta, mas já possui obras suficientes em carteira para alcançá-la.
+
+            **🟠 Precisa de mais obras / Carga parcial** — ainda falta carga para cobrir a meta.
+
+            **🔴 Sem obras** — não há obra aberta na carteira.
+
+            **🔒 Bloqueado — projeto acima da meta diária** — possui uma obra grande e não pode receber novas obras até liberar a carteira.
+
+            **🟡 Revisar Postes Alterados/Novos** — existe carga cuja quantidade de postes não está corretamente informada.
+            """
+        )
+
+    with st.expander("16. Como funciona a produtividade diária, semanal e mensal?"):
+        st.markdown(
+            """
+            A referência é sempre a **coluna V — Data de entrega do projeto**.
+
+            Uma obra só entra nos indicadores se estiver **Concluído** e a coluna V tiver uma data válida.
+
+            - **Diária:** entregas cuja data V é o dia selecionado.
+            - **Semanal:** entregas dentro da semana correspondente.
+            - **Mensal:** entregas dentro do mês correspondente.
+
+            A produção de dias anteriores não é usada para reduzir a meta de hoje.
+            """
+        )
+
+    with st.expander("17. O que a análise preditiva significa?"):
+        st.markdown(
+            """
+            A análise preditiva é uma **projeção baseada no ritmo histórico recente**, não uma garantia de resultado.
+
+            Ela ajuda a identificar quem, mantendo o ritmo observado, tende a chegar próximo da meta mensal e quem merece acompanhamento.
+
+            Deve ser usada como apoio gerencial junto com contexto operacional, complexidade dos projetos, indisponibilidades e qualidade da base.
+            """
+        )
+
+    with st.expander("18. O botão Limpar dados apaga alguma planilha original?"):
+        st.markdown(
+            """
+            **Não.** O botão **🧹 LIMPAR DADOS** limpa apenas os arquivos e resultados temporários da sessão atual do Streamlit.
+
+            Ele não apaga nem altera os arquivos originais no seu computador, no GitHub ou no Microsoft Lists.
+
+            Use-o sempre que for iniciar uma nova rodada de análise com arquivos diferentes, para evitar misturar dados de sessões anteriores.
+            """
+        )
+
+    with st.expander("19. A ferramenta altera os arquivos originais que eu enviei?"):
+        st.markdown(
+            """
+            No fluxo Excel, **não**. A ferramenta trabalha em memória e gera cópias distribuídas para download.
+
+            Os arquivos originais enviados permanecem intactos.
+
+            Quando a integração real com Microsoft Lists estiver habilitada para escrita, as alterações no Lists só devem ocorrer após as travas e confirmações previstas no modo Administrador.
+            """
+        )
+
+    with st.expander("20. O que devo conferir antes de confiar no resultado?"):
+        st.markdown(
+            """
+            Antes de usar a distribuição operacionalmente, confira:
+
+            - se os 3 arquivos corretos foram carregados;
+            - se a quantidade de projetistas reconhecidos está correta;
+            - se a base combinada mostra volumes coerentes;
+            - se os projetos disponíveis realmente estão com Status = Em projeto;
+            - se os projetistas já atribuídos foram reconhecidos na carteira;
+            - se Postes Alterados/Novos está coerente na BASE LEVANTAMENTO;
+            - se a simulação distribuiu sem duplicar projetos;
+            - se projetos acima da meta respeitaram a trava;
+            - se o critério de experiência, quando ligado, produziu combinações aceitáveis;
+            - se o arquivo baixado contém as atribuições esperadas.
+
+            Se qualquer número parecer incoerente, não gere/aplique a distribuição definitiva antes de consultar **Regras e parâmetros**.
+            """
+        )
+
+    with st.expander("21. O que fazer quando aparecer um erro no Streamlit?"):
+        st.markdown(
+            """
+            Primeiro identifique em que etapa ocorreu:
+
+            **Erro ao carregar arquivo:** confirme se é `.xlsx`, se as colunas esperadas existem e se o arquivo não está corrompido.
+
+            **Erro após atualização do GitHub:** confirme se todos os arquivos da mesma versão foram enviados. Misturar `app.py` novo com módulos `src/` antigos pode causar `ImportError`.
+
+            **Erro de Microsoft Lists:** consulte os logs do Streamlit e verifique Secrets, permissões e nomes internos das colunas.
+
+            **Tela com dados antigos:** use **🧹 LIMPAR DADOS** e carregue novamente os três arquivos.
+
+            No Streamlit Cloud, o detalhe técnico do erro fica em **Manage app → Logs**.
+            """
+        )
+
+    with st.expander("22. Como saber, em uma frase, se a ferramenta funcionou?"):
+        st.success(
+            "Funcionou quando os 3 arquivos foram reconhecidos, a base combinada foi criada, a simulação apresentou atribuições coerentes, "
+            "a geração terminou sem erro e os arquivos baixados contêm exatamente as novas atribuições esperadas sem alterar os arquivos originais."
+        )
+
+    st.markdown('<div class="section-title">Checklist final de validação</div>', unsafe_allow_html=True)
+    checklist = pd.DataFrame({
+        "Verificação": [
+            "BASE LIST LEVANTAMENTO carregada",
+            "BASE LIST VU carregada",
+            "PROJETISTAS carregada",
+            "Indicador mostra 3/3 arquivos",
+            "Base combinada pronta",
+            "Simulação gerada sem erro",
+            "Nenhuma obra duplicada indevidamente",
+            "Carteiras existentes reconhecidas",
+            "Projetos grandes respeitam a trava",
+            "Downloads gerados quando há novas atribuições",
+            "Arquivos originais permanecem intactos",
+        ],
+        "Resultado esperado": [
+            "Mensagem verde",
+            "Mensagem verde",
+            "Mensagem verde",
+            "100%",
+            "Mensagem verde com quantidade das duas fontes",
+            "Tabela de novas atribuições",
+            "Duplicados LEV/VU tratados uma única vez",
+            "Obras Em projeto já atribuídas aparecem na carga",
+            "Projetista bloqueado até concluir a carteira",
+            "Botões verdes de download",
+            "Somente cópias distribuídas são geradas",
+        ],
+    })
+    st.dataframe(checklist, use_container_width=True, hide_index=True)
+    st.stop()
 
 
 # -----------------------------------------------------------------------------
@@ -1395,7 +1786,7 @@ if PAGE == "🏠 Início":
                 st.caption("A aplicação definitiva é feita na página Distribuir obras.")
         with b2:
             if st.button("➡️ CONFERIR DISTRIBUIÇÃO DETALHADA", use_container_width=True):
-                st.session_state.nav_page = "⚡ Distribuir obras"
+                st.session_state.pending_nav = "⚡ Distribuir obras"
                 st.rerun()
         render_download_result()
 
