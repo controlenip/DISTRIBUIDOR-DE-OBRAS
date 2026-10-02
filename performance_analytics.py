@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from .metrics import prepare_projects
+from .models import StatusConfig
 from .name_utils import normalize_person_name
 
 
@@ -170,7 +171,9 @@ def designer_monthly_prediction_advanced(
     remaining_dates = _business_dates(now_local.date() + timedelta(days=1), month_end)
     total_workdays = len(_business_dates(month_start, month_end))
 
-    completed = df[df["completed_dt"].notna()].copy()
+    completed = df[
+        df["status_norm"].isin(statuses.completed_set) & df["completed_dt"].notna()
+    ].copy()
     completed["work_date"] = completed["completed_dt"].dt.date
     completed = completed[(completed["work_date"] >= month_start) & (completed["work_date"] <= now_local.date())]
 
@@ -284,6 +287,7 @@ def designer_daily_history(
     targets,
     timezone: str = "America/Fortaleza",
     days: int = 20,
+    statuses: StatusConfig | None = None,
 ) -> pd.DataFrame:
     """Daily history for one designer across the last N business days."""
     df = prepare_projects(projects, timezone)
@@ -295,7 +299,10 @@ def designer_daily_history(
         current -= timedelta(days=1)
     business = list(reversed(business))
 
-    completed = df[df["completed_dt"].notna()].copy()
+    status_cfg = statuses or StatusConfig()
+    completed = df[
+        df["status_norm"].isin(status_cfg.completed_set) & df["completed_dt"].notna()
+    ].copy()
     completed["work_date"] = completed["completed_dt"].dt.date
     norm = normalize_person_name(designer)
     completed = completed[completed["assignee_norm"] == norm]
@@ -348,13 +355,17 @@ def designer_quality_proxy(
     start_date: date,
     end_date: date,
     timezone: str = "America/Fortaleza",
+    statuses: StatusConfig | None = None,
 ) -> pd.DataFrame:
     """Optional quality signal based on 'Data da reanálise' when the source provides it.
 
     This is intentionally labelled as reanalysis, not as an error/rework verdict.
     """
     df = prepare_projects(projects, timezone)
-    completed = df[df["completed_dt"].notna()].copy()
+    status_cfg = statuses or StatusConfig()
+    completed = df[
+        df["status_norm"].isin(status_cfg.completed_set) & df["completed_dt"].notna()
+    ].copy()
     completed["work_date"] = completed["completed_dt"].dt.date
     completed = completed[(completed["work_date"] >= start_date) & (completed["work_date"] <= end_date)]
     rows=[]

@@ -33,10 +33,10 @@ def _row(**overrides):
     return row
 
 
-def test_project_designer_production_uses_delivery_date_even_after_status_advanced():
+def test_project_designer_production_requires_completed_status_and_delivery_date():
     projects = pd.DataFrame([
         _row(
-            status="Análise de Qualidade",
+            status="Concluído",
             completed_at="2026-10-01 14:00:00",
             actual_posts=10,
             posts=9,

@@ -1,4 +1,6 @@
-# NIP Smart Distribuição — V19
+# NIP Smart Distribuicao - V20
+
+> **Deploy:** substitua o repositorio completo. Nao envie apenas `app.py`. A VU depende de `src/excel_loader.py`, `src/source_combiner.py` e `src/excel_writer.py` da mesma versao.
 
 ## Novidade da V19: LEVANTAMENTO + VU são obrigatórias e complementares
 

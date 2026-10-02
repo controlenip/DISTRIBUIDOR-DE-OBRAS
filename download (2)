@@ -1,18 +1,2 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-venv/
-.env
-.streamlit/secrets.toml
-.DS_Store
-*.log
-# Bases operacionais não devem ser versionadas no GitHub
-BASE_LIST.xlsx
-PROJETISTAS.xlsx
-*BASE_LIST*.xlsx
-*PROJETISTAS*.xlsx
-
-# Arquivos locais de automação
-data/automation_audit.sqlite3
-output/*.xlsx
+# Created by pytest automatically.
+*

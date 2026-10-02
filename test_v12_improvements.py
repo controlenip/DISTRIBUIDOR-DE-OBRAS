@@ -58,7 +58,7 @@ def test_balance_metrics_are_bounded():
 
 def test_designer_daily_history_has_business_days():
     projects = pd.DataFrame([
-        {"item_id":"1","note":"1","sgo":"4301","posts":5,"posts_valid":True,"actual_posts":5,"assignee":"A","status":"Análise de Qualidade","completed_at":"2026-10-01"},
+        {"item_id":"1","note":"1","sgo":"4301","posts":5,"posts_valid":True,"actual_posts":5,"assignee":"A","status":"Concluído","completed_at":"2026-10-01"},
     ])
     history = designer_daily_history(projects, "A", date(2026,10,1), Targets(), days=5)
     assert len(history) == 5

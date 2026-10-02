@@ -64,7 +64,9 @@ def prepare_projects(projects: pd.DataFrame, timezone: str) -> pd.DataFrame:
     df["completed_dt"] = _safe_datetime(df["completed_at"], timezone)
     df["reanalyzed_dt"] = _safe_datetime(df["reanalyzed_at"], timezone)
     df["modified_dt"] = _safe_datetime(df["modified_at"], timezone)
-    df["completion_reference"] = df["completed_dt"].where(df["completed_dt"].notna(), df["modified_dt"])
+    # A coluna V (Data de entrega do projeto) é a única referência temporal de produtividade.
+    # Não fazemos fallback para modified_at: sem data válida na coluna V, não há produção contabilizada.
+    df["completion_reference"] = df["completed_dt"]
     df["deadline_dt"] = pd.to_datetime(df["deadline"], errors="coerce")
     return df
 
@@ -81,9 +83,15 @@ def build_daily_snapshots(
     now_local = now.astimezone(ZoneInfo(timezone)) if now.tzinfo else now.replace(tzinfo=ZoneInfo(timezone))
     today = now_local.date()
 
-    # A Data de entrega do projeto é a fonte de verdade da produção do projetista.
-    # O status pode já ter avançado para Análise de Qualidade no mesmo dia.
-    completed_today_mask = df["completed_dt"].notna() & (df["completed_dt"].dt.date == today)
+    # Produção realizada exige DUAS condições simultâneas:
+    # 1) Status do projeto = Concluído; e
+    # 2) coluna V (Data de entrega do projeto) preenchida com data válida.
+    # Projeto apenas atribuído / Em projeto permanece somente na carteira.
+    completed_today_mask = (
+        df["status_norm"].isin(statuses.completed_set)
+        & df["completed_dt"].notna()
+        & (df["completed_dt"].dt.date == today)
+    )
     active_mask = df["status_norm"].isin(statuses.project_pool_set) & (df["assignee_norm"] != "")
 
     elapsed_min = productive_minutes_elapsed(now_local, timezone)
@@ -105,6 +113,10 @@ def build_daily_snapshots(
         active_posts = int(d_active.loc[d_active["posts_valid"], "posts"].sum())
         active_projects = int(len(d_active))
         active_missing_pln = int((~d_active["posts_valid"]).sum())
+        oversized_active = d_active[d_active["posts_valid"] & (d_active["posts"] > targets.target_posts)]
+        oversized_active_count = int(len(oversized_active))
+        largest_active_project = int(d_active.loc[d_active["posts_valid"], "posts"].max()) if d_active["posts_valid"].any() else 0
+        overload_lock = oversized_active_count > 0
         potential_posts = completed_posts + active_posts
         potential_projects = completed_projects + active_projects
 
@@ -133,6 +145,8 @@ def build_daily_snapshots(
 
         if full_hit:
             situation = "Meta atingida"
+        elif overload_lock:
+            situation = "Bloqueado - projeto acima da meta diária"
         elif active_missing_pln > 0:
             situation = "PLN pendente na carteira"
         elif lacks_load:
@@ -168,6 +182,9 @@ def build_daily_snapshots(
                 "Postes em carteira": active_posts,
                 "Projetos em carteira": active_projects,
                 "Carteira sem PLN": active_missing_pln,
+                "Projetos acima da meta na carteira": oversized_active_count,
+                "Maior projeto em carteira": largest_active_project,
+                "Bloqueio projeto acima da meta": overload_lock,
                 "Potencial postes": potential_posts,
                 "Potencial projetos": potential_projects,
                 "Faltam postes": max(0, targets.target_posts - completed_posts),
@@ -218,6 +235,10 @@ def build_assignment_baseline(
         assigned_projects = int(len(d))
         assigned_posts = int(d.loc[d["posts_valid"], "posts"].sum())
         missing_pln = int((~d["posts_valid"]).sum())
+        oversized_projects = d[d["posts_valid"] & (d["posts"] > targets.target_posts)]
+        oversized_count = int(len(oversized_projects))
+        largest_project = int(d.loc[d["posts_valid"], "posts"].max()) if d["posts_valid"].any() else 0
+        overload_lock = oversized_count > 0
         remaining_posts = max(0, targets.target_posts - assigned_posts)
         remaining_projects = max(0, targets.target_projects - assigned_projects)
 
@@ -226,6 +247,8 @@ def build_assignment_baseline(
 
         if assigned_projects == 0:
             situation = "Sem projeto atribuído - meta inteira"
+        elif overload_lock:
+            situation = "Bloqueado - projeto acima da meta diária"
         elif missing_pln > 0:
             situation = "PLN pendente - carga parcial"
         elif remaining_posts == 0 and remaining_projects == 0:
@@ -239,6 +262,9 @@ def build_assignment_baseline(
                 "Projetos já atribuídos": assigned_projects,
                 "PLN já atribuído": assigned_posts,
                 "Projetos sem PLN": missing_pln,
+                "Projetos acima da meta diária": oversized_count,
+                "Maior projeto em carteira": largest_project,
+                "Bloqueado por projeto acima da meta": overload_lock,
                 "Meta diária postes": targets.target_posts,
                 "Meta diária projetos": targets.target_projects,
                 "Meta restante postes": remaining_posts,
@@ -255,7 +281,9 @@ def build_assignment_baseline(
 
 def _period_metrics(projects, designers, start_date, end_date, targets, statuses, timezone):
     df = prepare_projects(projects, timezone)
-    completed = df[df["completed_dt"].notna()].copy()
+    completed = df[
+        df["status_norm"].isin(statuses.completed_set) & df["completed_dt"].notna()
+    ].copy()
     completed["work_date"] = completed["completed_dt"].dt.date
     completed = completed[(completed["work_date"] >= start_date) & (completed["work_date"] <= end_date)]
 
@@ -334,13 +362,19 @@ def data_quality_summary(projects: pd.DataFrame, statuses: StatusConfig) -> dict
     valid_notes = pool.loc[pool["note"].notna(), "note"].astype(str).str.strip()
     valid_notes = valid_notes[valid_notes != ""]
     duplicate_notes = int(valid_notes.duplicated(keep=False).sum())
+    completed_status = df[df["status_norm"].isin(statuses.completed_set)].copy()
+    completed_without_delivery_date = int(completed_status["completed_dt"].isna().sum())
+    completed_with_delivery_date = int(completed_status["completed_dt"].notna().sum())
+    source_is_vu_available = available.get("source_base", pd.Series("", index=available.index)).astype(str).eq("VU")
     return {
         "em_projeto": int(len(pool)),
         "disponiveis": int(len(available)),
         "atribuidos": int(len(assigned)),
-        "disponiveis_sem_pln": int((~available["posts_valid"]).sum()),
+        "disponiveis_sem_pln": int(((~available["posts_valid"]) & (~source_is_vu_available)).sum()),
         "atribuidos_sem_pln": int((~assigned["posts_valid"]).sum()),
         "disponiveis_sem_sgo": int((~available["sgo_present"]).sum()),
         "sgo_duplicado": duplicate_sgo,
         "nota_duplicada": duplicate_notes,
+        "concluidos_com_data_entrega": completed_with_delivery_date,
+        "concluidos_sem_data_entrega": completed_without_delivery_date,
     }

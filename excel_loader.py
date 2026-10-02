@@ -97,6 +97,55 @@ def load_base_excel(source) -> pd.DataFrame:
     return out
 
 
+
+def load_vu_excel(source) -> pd.DataFrame:
+    """Load BASE LIST VU using only columns A (project number) and C (status).
+
+    The VU source intentionally has no workload/post count or assignee fields.
+    Each valid row therefore contributes one project to the distribution pool,
+    while post coverage remains unknown until a richer source provides it.
+    """
+    raw = _read_excel(source)
+    if raw.shape[1] < 3:
+        raise ValueError("A BASE LIST VU precisa possuir pelo menos as colunas A e C.")
+
+    project_col = raw.columns[0]  # A
+    status_col = raw.columns[2]   # C
+
+    out = pd.DataFrame(index=raw.index)
+    out["item_id"] = [f"excel-vu-{i + 2}" for i in range(len(raw))]
+    out["source_row"] = raw.index + 2
+    out["note"] = None
+    def _project_number(value):
+        if pd.isna(value):
+            return None
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        if isinstance(value, int):
+            return str(value)
+        text = str(value).strip()
+        return text or None
+    out["sgo"] = raw[project_col].map(_project_number)
+    out["status"] = raw[status_col].fillna("").astype(str).str.strip()
+    out["project_type"] = ""
+    out["regional"] = ""
+    out["municipality"] = ""
+    out["deadline"] = None
+    out["posts"] = 0
+    out["posts_valid"] = False
+    out["assignee"] = ""
+    out["completed_at"] = None
+    out["actual_posts"] = None
+    out["priority"] = "Normal"
+    out["reanalyzed_at"] = None
+    out["assigned_at"] = None
+    out["complexity"] = None
+    out["modified_at"] = None
+    out["etag"] = None
+    out["assignee_lookup_id"] = None
+    out["workload_known"] = False
+    return out
+
 def load_designers_excel(source) -> pd.DataFrame:
     raw = _read_excel(source)
     name_col = _find_column(raw, DESIGNER_ALIASES["name"])

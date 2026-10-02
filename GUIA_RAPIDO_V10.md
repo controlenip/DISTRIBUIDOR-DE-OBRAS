@@ -3,11 +3,11 @@
 ## Para distribuir obras
 
 1. Abra a página **Início**.
-2. Carregue a **BASE LIST.xlsx**.
+2. Carregue a **BASE LIST LEVANTAMENTO.xlsx** e/ou a **BASE LIST VU.xlsx**.
 3. Carregue a **PROJETISTAS.xlsx**.
 4. Confira o resumo da equipe.
 5. Clique em **GERAR DISTRIBUIÇÃO AUTOMÁTICA**.
-6. Clique em **Baixar BASE LIST distribuída**.
+6. Clique em **Baixar a(s) BASE LIST distribuída(s)**.
 
 A BASE original permanece intacta.
 

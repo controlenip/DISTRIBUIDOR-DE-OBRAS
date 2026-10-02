@@ -1,0 +1,9 @@
+NIP Smart Distribuicao - V20
+
+IMPORTANTE PARA DEPLOY:
+Substitua o repositorio completo. Nao atualize somente app.py.
+Arquivos VU que precisam estar na mesma versao:
+- app.py
+- src/excel_loader.py
+- src/source_combiner.py
+- src/excel_writer.py

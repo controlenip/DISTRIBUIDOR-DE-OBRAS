@@ -63,3 +63,20 @@ def test_distribution_holds_designer_with_assigned_project_without_pln():
     suggestions, summary = suggest_assignments(projects, snapshots, Targets(), StatusConfig())
     assert suggestions.empty
     assert summary.iloc[0]["Motivo"] == "Distribuição bloqueada: existe projeto atribuído sem Postes Alterados/Novos"
+
+
+def test_distribution_preserves_base_origin():
+    projects = pd.DataFrame([
+        {"item_id": "LEVANTAMENTO::excel-2", "source_base": "LEVANTAMENTO", "note": "111", "sgo": "4301", "posts": 5, "posts_valid": True, "assignee": "", "status": "Em projeto", "priority": "Normal", "deadline": None, "etag": None},
+        {"item_id": "VU::excel-2", "source_base": "VU", "note": "211", "sgo": "5301", "posts": 5, "posts_valid": True, "assignee": "", "status": "Em projeto", "priority": "Normal", "deadline": None, "etag": None},
+    ])
+    snapshots = pd.DataFrame([{
+        "Projetista": "Projetista A",
+        "Postes realizados": 20,
+        "Projetos realizados": 3,
+        "Sem cobertura postes": 10,
+        "Sem cobertura projetos": 2,
+        "Tempo útil restante (min)": 240,
+    }])
+    suggestions, _ = suggest_assignments(projects, snapshots, Targets(), StatusConfig())
+    assert set(suggestions["Base de origem"]) == {"LEVANTAMENTO", "VU"}
