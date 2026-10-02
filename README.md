@@ -1,11 +1,11 @@
-# NIP Smart Distribuição — V10
+# NIP Smart Distribuição — V11
 
 Aplicação **Python + Streamlit** para dois objetivos principais:
 
 1. **distribuir obras de forma equilibrada entre os projetistas**;
 2. **acompanhar a produtividade diária, semanal e mensal dos projetistas**.
 
-A V10 foi reorganizada para ficar mais simples para quem usa a ferramenta pela primeira vez.
+A V11 mantém a interface simplificada e acrescenta um **reset completo da sessão** para evitar dados residuais entre análises.
 
 ## Fluxo de uso
 
@@ -14,6 +14,8 @@ No modo Excel, o usuário segue apenas três passos:
 1. carregar `BASE LIST.xlsx`;
 2. carregar `PROJETISTAS.xlsx`;
 3. clicar em **GERAR DISTRIBUIÇÃO AUTOMÁTICA** e baixar a nova BASE LIST.
+
+Quando for iniciar uma nova análise, use **🧹 Limpar dados** no menu lateral. O botão remove os dois uploads, resultados, planilha gerada, diagnósticos e dados temporários da sessão.
 
 A planilha original não é alterada.
 
@@ -129,9 +131,10 @@ A integração via Microsoft Graph continua preparada, mas fica em **Opções av
 
 Nunca envie credenciais, `secrets.toml`, `BASE_LIST.xlsx` ou `PROJETISTAS.xlsx` para um repositório público.
 
-## Validação da V10
+## Validação da V11
 
 - 21 testes automatizados aprovados;
+- botão **🧹 Limpar dados** validado com reset dos estados de trabalho e recriação dos campos de upload;
 - leitura validada com a BASE LIST e PROJETISTAS fornecidos;
 - 21 projetistas reconhecidos;
 - 12 projetistas sem obra na carteira atual;

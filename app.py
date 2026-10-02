@@ -324,9 +324,42 @@ for key, default in {
     "generated_excel_name": "",
     "generated_distribution_suggestions": pd.DataFrame(),
     "generated_distribution_summary": pd.DataFrame(),
+    "uploader_epoch": 0,
+    "data_cleared_notice": False,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+def clear_working_data():
+    """Return the app to a clean state without changing configuration/secrets."""
+    st.session_state.demo_projects = sample_projects(TIMEZONE)
+    st.session_state.excel_projects = pd.DataFrame()
+    st.session_state.uploaded_designers = pd.DataFrame()
+    st.session_state.graph_projects = pd.DataFrame()
+    st.session_state.last_sync = None
+    st.session_state.column_diagnostics = pd.DataFrame()
+    st.session_state.base_excel_bytes = b""
+    st.session_state.base_excel_name = ""
+    st.session_state.base_excel_signature = ""
+    st.session_state.designers_signature = ""
+    st.session_state.request_auto_distribution = False
+    st.session_state.generated_excel_bytes = b""
+    st.session_state.generated_excel_name = ""
+    st.session_state.generated_distribution_suggestions = pd.DataFrame()
+    st.session_state.generated_distribution_summary = pd.DataFrame()
+    st.session_state.pop("last_auto_result", None)
+
+    # Force file uploaders to be recreated with fresh widget keys.
+    st.session_state.uploader_epoch = int(st.session_state.get("uploader_epoch", 0)) + 1
+    st.session_state.data_cleared_notice = True
+
+    # Clear cached data, if any helper has been cached in future versions.
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
 
 NOW = datetime.now(ZoneInfo(TIMEZONE))
 
@@ -348,6 +381,15 @@ st.sidebar.markdown("**Como usar**")
 st.sidebar.caption("1. Carregue as duas planilhas")
 st.sidebar.caption("2. Gere a distribuição")
 st.sidebar.caption("3. Baixe a nova BASE LIST")
+
+st.sidebar.divider()
+if st.sidebar.button(
+    "🧹 Limpar dados",
+    use_container_width=True,
+    help="Remove os arquivos carregados e todos os resultados temporários desta sessão.",
+):
+    clear_working_data()
+    st.rerun()
 
 with st.sidebar.expander("Opções avançadas"):
     source_mode = st.selectbox("Fonte de dados", ["Excel - validação", "Microsoft Lists", "DEMO"], index=0)
@@ -393,6 +435,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if st.session_state.get("data_cleared_notice"):
+    st.success("🧹 Dados limpos. A ferramenta está pronta para receber uma nova BASE LIST e uma nova lista de projetistas.")
+    st.session_state.data_cleared_notice = False
+
 
 # -----------------------------------------------------------------------------
 # SOURCE INPUTS
@@ -412,7 +458,7 @@ def render_excel_uploads():
         base_upload = st.file_uploader(
             "BASE LIST (.xlsx)",
             type=["xlsx"],
-            key="base_list_main_v10",
+            key=f"base_list_main_v11_{st.session_state.uploader_epoch}",
             help="Arquivo exportado do Microsoft Lists com as obras.",
         )
         if base_upload is not None:
@@ -432,7 +478,7 @@ def render_excel_uploads():
         designer_upload = st.file_uploader(
             "PROJETISTAS (.xlsx)",
             type=["xlsx"],
-            key="designers_main_v10",
+            key=f"designers_main_v11_{st.session_state.uploader_epoch}",
             help="Lista de projetistas que podem receber novas obras.",
         )
         if designer_upload is not None:
@@ -450,7 +496,7 @@ def render_excel_uploads():
 
 def render_lists_input():
     st.markdown('<div class="section-title">Conexão com Microsoft Lists</div>', unsafe_allow_html=True)
-    designer_upload = st.file_uploader("PROJETISTAS.xlsx", type=["xlsx"], key="designers_lists_v10")
+    designer_upload = st.file_uploader("PROJETISTAS.xlsx", type=["xlsx"], key=f"designers_lists_v11_{st.session_state.uploader_epoch}")
     if designer_upload is not None:
         try:
             st.session_state.uploaded_designers = load_designers_excel(designer_upload)
