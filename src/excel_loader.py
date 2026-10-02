@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from io import BytesIO
-from pathlib import Path
-from typing import BinaryIO
-
 import pandas as pd
 
 from .name_utils import normalize_column_label
@@ -16,6 +12,7 @@ BASE_ALIASES = {
     "regional": ["Regional"],
     "municipality": ["Município", "Municipio"],
     "deadline": ["Prazo"],
+    # Coluna R - continua sendo o peso principal da obra para distribuição aos projetistas.
     "posts": ["P L N", "P L N ", "PLN"],
     "assignee": ["Projetistas", "Projetista"],
     "completed_at": ["Data de entrega do projeto"],
@@ -50,23 +47,36 @@ def _find_column(df: pd.DataFrame, aliases: list[str], required: bool = True) ->
 
 
 def load_base_excel(source) -> pd.DataFrame:
-    """Load an exported Microsoft Lists workbook into the app's canonical schema."""
+    """Load an exported Microsoft Lists workbook into the app's canonical schema.
+
+    Distribution uses PLN (column R) as the project workload for designers.
+    Columns related to field surveyors are intentionally ignored by this application.
+    """
     raw = _read_excel(source)
+    optional = {
+        "actual_posts", "priority", "deadline", "completed_at",
+    }
     cols = {
-        key: _find_column(raw, aliases, required=key not in {"actual_posts", "priority", "deadline", "completed_at"})
+        key: _find_column(raw, aliases, required=key not in optional)
         for key, aliases in BASE_ALIASES.items()
     }
 
     out = pd.DataFrame(index=raw.index)
     out["item_id"] = [f"excel-{i + 2}" for i in range(len(raw))]
     out["source_row"] = raw.index + 2
-    for key in ["note", "sgo", "status", "regional", "municipality", "deadline", "posts", "assignee", "completed_at", "actual_posts", "priority"]:
+    ordered = [
+        "note", "sgo", "status", "regional", "municipality", "deadline", "posts",
+        "assignee", "completed_at", "actual_posts", "priority",
+    ]
+    for key in ordered:
         col = cols.get(key)
         out[key] = raw[col] if col else None
 
     posts_numeric = pd.to_numeric(out["posts"], errors="coerce")
     out["posts_valid"] = posts_numeric.notna() & (posts_numeric > 0)
     out["posts"] = posts_numeric.fillna(0).astype(int)
+
+
     out["assignee"] = out["assignee"].fillna("").astype(str).str.strip()
     out["status"] = out["status"].fillna("").astype(str).str.strip()
     out["note"] = out["note"].where(out["note"].notna(), None)

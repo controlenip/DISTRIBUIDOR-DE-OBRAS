@@ -31,7 +31,7 @@ def prepare_projects(projects: pd.DataFrame, timezone: str) -> pd.DataFrame:
     expected = [
         "item_id", "note", "sgo", "municipality", "regional", "posts", "posts_valid",
         "assignee", "status", "priority", "deadline", "complexity", "assigned_at",
-        "completed_at", "actual_posts", "modified_at", "etag", "assignee_lookup_id",
+        "completed_at", "actual_posts", "modified_at", "etag", "assignee_lookup_id"
     ]
     for col in expected:
         if col not in df.columns:
@@ -51,6 +51,7 @@ def prepare_projects(projects: pd.DataFrame, timezone: str) -> pd.DataFrame:
     # quando existir; se não existir, usa PLN como fallback.
     df["production_posts_valid"] = df["actual_posts_valid"] | df["posts_valid"]
     df["production_posts"] = df["actual_posts_numeric"].where(df["actual_posts_valid"], df["posts"])
+
 
     df["assignee"] = df["assignee"].fillna("").astype(str).str.strip()
     df["assignee_norm"] = df["assignee"].map(normalize_person_name)
@@ -76,8 +77,9 @@ def build_daily_snapshots(
     now_local = now.astimezone(ZoneInfo(timezone)) if now.tzinfo else now.replace(tzinfo=ZoneInfo(timezone))
     today = now_local.date()
 
-    completed_mask = df["status_norm"].isin(statuses.completed_set)
-    completed_today_mask = completed_mask & df["completion_reference"].notna() & (df["completion_reference"].dt.date == today)
+    # A Data de entrega do projeto é a fonte de verdade da produção do projetista.
+    # O status pode já ter avançado para Análise de Qualidade no mesmo dia.
+    completed_today_mask = df["completed_dt"].notna() & (df["completed_dt"].dt.date == today)
     active_mask = df["status_norm"].isin(statuses.project_pool_set) & (df["assignee_norm"] != "")
 
     elapsed_min = productive_minutes_elapsed(now_local, timezone)
@@ -140,6 +142,19 @@ def build_daily_snapshots(
         else:
             situation = "Carteira suficiente"
 
+        adherence_posts = 100.0 if expected_posts <= 0 else min(999.0, completed_posts / expected_posts * 100)
+        adherence_projects = 100.0 if expected_projects <= 0 else min(999.0, completed_projects / expected_projects * 100)
+        if full_hit:
+            pace_status = "Meta atingida"
+        elif remaining_min == 0:
+            pace_status = "Abaixo da meta" if not min_hit else "Faixa mínima atingida"
+        elif completed_posts >= expected_posts and completed_projects >= expected_projects:
+            pace_status = "No ritmo"
+        elif projected_posts >= targets.target_posts and projected_projects >= targets.target_projects:
+            pace_status = "Recuperável"
+        else:
+            pace_status = "Abaixo do ritmo"
+
         rows.append(
             {
                 "Projetista": designer,
@@ -157,6 +172,9 @@ def build_daily_snapshots(
                 "Sem cobertura projetos": max(0, targets.target_projects - potential_projects),
                 "Meta postes agora": round(expected_posts, 1),
                 "Meta projetos agora": round(expected_projects, 1),
+                "Aderência postes %": round(adherence_posts, 1),
+                "Aderência projetos %": round(adherence_projects, 1),
+                "Status ritmo": pace_status,
                 "Ritmo postes/h": round(current_rate_posts, 2),
                 "Ritmo necessário postes/h": round(required_rate_posts, 2),
                 "Ritmo projetos/h": round(current_rate_projects, 2),
@@ -233,8 +251,8 @@ def build_assignment_baseline(
 
 def _period_metrics(projects, designers, start_date, end_date, targets, statuses, timezone):
     df = prepare_projects(projects, timezone)
-    completed = df[df["status_norm"].isin(statuses.completed_set) & df["completion_reference"].notna()].copy()
-    completed["work_date"] = completed["completion_reference"].dt.date
+    completed = df[df["completed_dt"].notna()].copy()
+    completed["work_date"] = completed["completed_dt"].dt.date
     completed = completed[(completed["work_date"] >= start_date) & (completed["work_date"] <= end_date)]
 
     rows = []

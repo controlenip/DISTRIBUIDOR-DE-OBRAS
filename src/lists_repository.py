@@ -45,17 +45,9 @@ class ResolvedFieldMap:
 
     def graph_fields(self) -> list[str]:
         values = [
-            self.note,
-            self.sgo,
-            self.status,
-            self.regional,
-            self.municipality,
-            self.deadline,
-            self.posts,
-            self.assignee,
-            self.completed_at,
-            self.actual_posts,
-            self.priority,
+            self.note, self.sgo, self.status, self.regional, self.municipality,
+            self.deadline, self.posts, self.assignee, self.completed_at,
+            self.actual_posts, self.priority,
         ]
         return [v for v in values if v]
 
@@ -142,7 +134,7 @@ class ListsProjectRepository:
         return self._resolved
 
     def column_diagnostics(self) -> pd.DataFrame:
-        resolved = self.resolve_fields()
+        self.resolve_fields()
         rows = []
         for logical_name, meta in self._column_meta.items():
             rows.append(
@@ -213,8 +205,6 @@ class ListsProjectRepository:
         else:
             payload = {f.assignee: designer}
 
-        # Status remains "Em projeto". The assignee field is what distinguishes
-        # available from already-assigned work in this operation.
         return self.graph.update_item_fields(
             self.site_id,
             self.list_id,

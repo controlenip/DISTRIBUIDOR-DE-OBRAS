@@ -1,215 +1,126 @@
-# NIP Smart Distribuição de Projetos - V4
+# NIP Smart Distribuição — V7
 
-Aplicação **Python + Streamlit** com motor independente para distribuição automática de projetos de rede de distribuição.
+Aplicação **Python + Streamlit** focada exclusivamente em **produtividade dos projetistas** e **distribuição igualitária de projetos de rede de distribuição**.
 
-A V4 mantém a automação da V3 e adiciona um fluxo explícito de **upload da BASE LIST e da planilha PROJETISTAS** no Streamlit. Assim que os dois arquivos são carregados, a aplicação identifica a carga já atribuída a cada projetista e calcula automaticamente a meta restante antes de sugerir novas obras.
+## Objetivo
 
-## Regras principais
+A ferramenta lê a `BASE LIST.xlsx` e a `PROJETISTAS.xlsx`, identifica a carteira já atribuída a cada projetista, calcula quanto falta para a meta diária e distribui automaticamente as obras disponíveis de forma balanceada.
 
-- Jornada: **08:00-12:00 e 13:12-18:00**.
-- Tempo produtivo: **528 min/dia (8h48min)**.
-- Faixa diária: **25-30 postes** e **4-5 projetos**.
-- Meta cheia do motor: **30 postes / 5 projetos**.
-- Meta diária **não cumulativa**.
-- Excedente é registrado como desempenho, mas não reduz a meta do próximo dia.
-- PLN planeja a carga; `Qtd. de poste` representa a produção final quando disponível.
+A ferramenta **não acompanha produtividade de levantadores**. As colunas O, P e Q da BASE LIST não participam dos indicadores nem da distribuição.
 
-## Mapeamento real da BASE_LIST
+## Metas operacionais
+
+- 25 a 30 postes por dia;
+- 4 a 5 projetos por dia;
+- jornada: 08:00–12:00 e 13:12–18:00;
+- 528 minutos produtivos por dia;
+- meta diária não cumulativa.
+
+O excedente de um dia é registrado apenas como desempenho e não reduz a meta do dia seguinte.
+
+## Colunas principais da BASE LIST
 
 | Coluna | Campo | Uso |
 |---|---|---|
-| A | `N° da nota` | solicitação do cliente |
-| C | `Nota SGO` | número usado pelo projetista para iniciar o projeto |
-| E | `Status do projeto` | somente `Em projeto` entra na fila operacional |
-| R | `P L N` | quantidade planejada de postes |
-| U | `Projetistas` | responsável atribuído |
-| V | `Data de entrega do projeto` | data usada para produção concluída |
-| W | `Qtd. de poste` | quantidade final de postes |
+| A | Nº da nota | solicitação do cliente |
+| C | Nota SGO | número utilizado pelo projetista para iniciar o projeto |
+| E | Status do projeto | somente `Em projeto` entra na carteira de distribuição |
+| R | P L N | quantidade de postes da obra e peso usado na distribuição |
+| U | Projetistas | projetista responsável pela obra |
+| V | Data de entrega do projeto | referência da produção diária |
+| W | Qtd. de poste | quantidade final concluída; PLN é usado como fallback quando W estiver vazio |
 
-Também são lidos Regional, Município, Prazo e Prioridade quando disponíveis.
+## Regra de carteira
 
+Uma obra já conta na carteira quando:
 
-## Carga já atribuída e meta restante - V4
+- `Status do projeto = Em projeto`;
+- `Projetistas` está preenchido.
 
-No modo `Excel - validação`, a tela principal possui dois uploads:
+Para cada projetista o sistema calcula:
 
-1. `BASE LIST.xlsx`;
-2. `PROJETISTAS.xlsx`.
-
-A análise é feita automaticamente. Para cada nome da planilha de projetistas, o sistema procura na BASE LIST obras com:
-
-```text
-Status do projeto = Em projeto
-Projetistas = nome do projetista
-```
-
-Depois calcula:
-
-```text
-Meta restante de postes = 30 - soma do PLN já atribuído
-Meta restante de projetos = 5 - quantidade de projetos já atribuídos
-```
-
-Se não houver nenhuma obra atribuída, a meta restante começa inteira em **30 postes / 5 projetos**.
-
-Se houver projeto já atribuído sem PLN, a tela marca `PLN pendente - carga parcial` e o motor bloqueia novas atribuições automáticas para esse projetista até o PLN ser regularizado. Isso evita sobrecarga por uma carteira cujo peso ainda é desconhecido.
-
-A aba **Meta restante** mostra, por projetista:
-
-- quantidade de projetos já atribuídos;
+- projetos já atribuídos;
 - PLN já atribuído;
-- quantidade de projetos sem PLN;
-- meta diária;
-- meta restante de postes;
 - meta restante de projetos;
-- cobertura percentual;
-- Notas SGO já presentes na carteira;
-- situação da carga.
+- meta restante de postes;
+- cobertura da meta;
+- carteira sem PLN, quando existir.
 
-## Obra elegível para distribuição
+Quem não possui nenhuma obra atribuída inicia com a meta integral de **30 postes / 5 projetos**.
 
-```text
-Status do projeto = Em projeto
-Projetistas = vazio
-Nota SGO = preenchida
-PLN > 0
-```
+## Obra elegível para distribuição automática
 
-Ao atribuir uma obra, o sistema **mantém o status Em projeto** e altera somente o projetista.
+Uma obra só é distribuída automaticamente quando:
 
-## Balanceamento V4
+- Status = `Em projeto`;
+- Projetistas está vazio;
+- Nota SGO está preenchida;
+- PLN é maior que zero.
 
-A distribuição é feita por rodadas. O sistema prioriza o projetista com menor cobertura combinada de postes e projetos, entrega uma obra, recalcula e só depois decide o próximo destino.
+## Distribuição igualitária
 
-Isso evita concentrar toda a fila disponível em um único projetista quando a quantidade de obras é limitada.
+O motor trabalha por cobertura de meta. Ele prioriza primeiro os projetistas com menor cobertura de postes/projetos e distribui uma obra por rodada antes de voltar ao mesmo projetista.
 
-## Arquivos de automação
+A seleção considera:
 
-### `worker.py`
+1. prioridade da obra;
+2. quanto falta de postes e projetos para o projetista;
+3. adequação do PLN ao restante da meta;
+4. prazo;
+5. equilíbrio entre as carteiras.
 
-Automação local usando `BASE_LIST.xlsx` e `PROJETISTAS.xlsx`.
+A distribuição para de abastecer um projetista quando sua carteira potencial cobre **30 postes e 5 projetos**.
 
-Simulação única:
+## Dashboard
 
-```bash
-python worker.py --base BASE_LIST.xlsx --designers PROJETISTAS.xlsx --mode dry-run
-```
+O painel possui:
 
-Gerar cópia da base com as atribuições:
+- KPIs do dia;
+- produção diária por projetista;
+- quantidade de projetos concluídos;
+- carga já atribuída;
+- carga média, mínima, máxima e diferença entre carteiras;
+- gráfico de equilíbrio da carteira;
+- lista diária de projetistas abaixo da meta ou do ritmo esperado;
+- alertas de falta de carga;
+- previsão até 18h;
+- acompanhamento semanal e mensal;
+- análise preditiva de fechamento do mês;
+- consistência de meta diária;
+- insights automáticos de gestão.
 
-```bash
-python worker.py --base BASE_LIST.xlsx --designers PROJETISTAS.xlsx --mode excel-copy --output output/BASE_LIST_DISTRIBUIDA.xlsx
-```
+## Upload e distribuição em um clique
 
-Executar simulações a cada 5 minutos:
+No modo `Excel - validação`:
 
-```bash
-python worker.py --base BASE_LIST.xlsx --designers PROJETISTAS.xlsx --mode dry-run --watch --interval 300
-```
+1. faça upload da `BASE LIST.xlsx`;
+2. faça upload da `PROJETISTAS.xlsx`;
+3. o botão **DISTRIBUIÇÃO AUTOMÁTICA** é habilitado;
+4. clique no botão;
+5. o sistema calcula as novas atribuições;
+6. é gerada uma nova planilha para download.
 
-### `worker_lists.py`
+A BASE original permanece intacta. Na planilha distribuída, somente a coluna **U — Projetistas** é preenchida nas obras selecionadas. Uma aba de auditoria da distribuição também é adicionada.
 
-Worker já preparado para o Microsoft Lists.
+## Arquivo principal do Streamlit
 
-Por padrão é somente leitura + dry-run:
-
-```bash
-python worker_lists.py --designers PROJETISTAS.xlsx
-```
-
-Para gravar no Lists são obrigatórias **duas liberações simultâneas**:
-
-```text
---apply
-NIP_ALLOW_LISTS_WRITE=YES
-```
-
-Depois da homologação, o modo recorrente será:
-
-```bash
-python worker_lists.py --designers PROJETISTAS.xlsx --apply --watch --interval 300
-```
-
-## Auditoria
-
-Os ciclos são registrados em:
+Ao publicar no Streamlit, use:
 
 ```text
-data/automation_audit.sqlite3
+app.py
 ```
 
-O banco guarda ciclos, sugestões, atribuições, erros e motivos. Ele não é versionado no GitHub.
+Todo o conteúdo do repositório deve permanecer no GitHub. Os usuários finais acessam apenas o link do Streamlit.
 
-## Estrutura
-
-```text
-nip-smart-distribuicao/
-├── app.py
-├── worker.py
-├── worker_lists.py
-├── requirements.txt
-├── executar_local.bat
-├── executar_automacao_simulacao.bat
-├── executar_automacao_copia_excel.bat
-├── executar_worker_lists_simulacao.bat
-├── config/
-│   └── microsoft_lists.env.example
-├── docs/
-│   ├── ARQUITETURA_AUTOMACAO.md
-│   ├── AUTOMACAO_LOCAL.md
-│   ├── MICROSOFT_LISTS_SETUP.md
-│   ├── PLANO_TESTE_MICROSOFT_LISTS.md
-│   └── VALIDACAO_BASE_REAL.md
-├── src/
-│   ├── audit_store.py
-│   ├── automation_engine.py
-│   ├── distribution_engine.py
-│   ├── excel_loader.py
-│   ├── excel_writer.py
-│   ├── graph_client.py
-│   ├── lists_repository.py
-│   ├── metrics.py
-│   ├── models.py
-│   ├── name_utils.py
-│   └── work_schedule.py
-└── tests/
-```
-
-## Segurança do repositório
-
-Não enviar ao GitHub:
-
-- `BASE_LIST.xlsx`;
-- `PROJETISTAS.xlsx`;
-- `.streamlit/secrets.toml`;
-- banco SQLite de auditoria;
-- cópias Excel geradas pela automação.
-
-Esses arquivos já estão cobertos pelo `.gitignore`.
-
-## Executar Streamlit
+## Execução local
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Ou use `executar_local.bat`.
+## Microsoft Lists
 
-## Testes
+A integração está preparada via Microsoft Graph. Antes de ativar escrita real, valide os nomes internos das colunas e mantenha `write_enabled = false` nos Secrets.
 
-```bash
-pytest -q
-```
-
-A V4 inclui testes de jornada, intervalo, Excel real, elegibilidade, distribuição balanceada, automação e escrita somente em cópia.
-
-## Validação realizada com a base recebida
-
-Na base de homologação foram encontrados 31 registros `Em projeto`, sendo 12 sem projetista e 19 já atribuídos. Nove obras estavam aptas à distribuição automática (34 postes de PLN).
-
-No teste da V4, as 9 obras elegíveis foram distribuídas de forma balanceada entre 9 projetistas conforme a cobertura existente. Ao gerar uma cópia do Excel, exatamente 9 linhas foram alteradas e todas continuaram com status `Em projeto`.
-
-Os arquivos operacionais reais não fazem parte do repositório.
+Nunca envie credenciais, `secrets.toml`, `BASE_LIST.xlsx` ou `PROJETISTAS.xlsx` para um repositório público.
